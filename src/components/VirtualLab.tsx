@@ -27,11 +27,18 @@ import {
   ToggleRight,
   Layers,
   Shield,
-  BrainCircuit
+  BrainCircuit,
+  Save,
+  Trash2,
+  Edit3,
+  Loader2
 } from "lucide-react";
 import PeriodicTable from "./PeriodicTable";
 import { cn } from "../lib/utils";
 import { ElementData, elements } from "../lib/elementData";
+import { useAuth } from "../hooks/useAuth";
+import { learningDataService } from "../services/learningData";
+import type { LabResult } from "../types";
 
 type Substance = {
   id: string;
@@ -509,10 +516,19 @@ export default function VirtualLab({
       description: "Agar plate showing rapid microbial growth and colony formation.",
     },
   };
+  const { user } = useAuth();
   const [temperature, setTemperature] = useState<number>(25);
   const [pH, setPH] = useState<number>(7);
   const [discoveredReactions, setDiscoveredReactions] = useState<string[]>([]);
   const [hasNewDiscovery, setHasNewDiscovery] = useState(false);
+  const [savedLabResults, setSavedLabResults] = useState<LabResult[]>([]);
+  const [loadingLabResults, setLoadingLabResults] = useState(false);
+  const [savingLabResult, setSavingLabResult] = useState(false);
+  const [labFeedback, setLabFeedback] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [editingLabId, setEditingLabId] = useState<string | null>(null);
+  const [editLabNotes, setEditLabNotes] = useState("");
+  const [customLabTitle, setCustomLabTitle] = useState("");
+  const [customLabOutcome, setCustomLabOutcome] = useState("");
   const [selectedMolecule, setSelectedMolecule] = useState<string>("H2O");
   const [pendingSubstance, setPendingSubstance] = useState<Substance | null>(
     null,
@@ -1196,6 +1212,102 @@ export default function VirtualLab({
     updateMeasurements(beaker, activeTool);
   }, [beaker, activeTool]);
 
+  const fetchSavedLabResults = React.useCallback(async () => {
+    if (!user?.uid) {
+      setSavedLabResults([]);
+      return;
+    }
+    setLoadingLabResults(true);
+    try {
+      const items = await learningDataService.getLabResults(user.uid);
+      setSavedLabResults(items);
+    } catch (error) {
+      console.error("Failed to fetch saved lab results:", error);
+    } finally {
+      setLoadingLabResults(false);
+    }
+  }, [user?.uid]);
+
+  React.useEffect(() => {
+    fetchSavedLabResults();
+  }, [fetchSavedLabResults]);
+
+  const handleSaveCurrentLabResult = async (overrideTitle?: string, overrideOutcome?: string) => {
+    if (!user?.uid || savingLabResult) return;
+    const outcomeText = (overrideOutcome ?? reaction ?? "").trim();
+    if (!outcomeText) return;
+
+    setSavingLabResult(true);
+    setLabFeedback(null);
+    const vesselContents = beaker.map((b) => `${b.name} (${b.quantity ?? 1})`).join(", ");
+    const measurementSummary = [
+      `pH: ${pH.toFixed(1)}`,
+      `Temp: ${temperature}°C`,
+      vesselContents ? `Reagents: ${vesselContents}` : null,
+    ]
+      .filter(Boolean)
+      .join(" | ");
+
+    try {
+      const created = await learningDataService.createLabResult({
+        experimentTitle:
+          (overrideTitle ?? "").trim() ||
+          `${subject.charAt(0).toUpperCase() + subject.slice(1)} Lab Observation`,
+        subject,
+        outcome: outcomeText,
+        formula: balancedEquation || "",
+        measurements: measurementSummary,
+        notes: reactionExplanation || "",
+      });
+      setSavedLabResults((prev) => [created, ...prev]);
+      setLabFeedback({ type: "success", text: "Lab result saved to Firestore." });
+      setCustomLabTitle("");
+      setCustomLabOutcome("");
+    } catch (error: any) {
+      setLabFeedback({
+        type: "error",
+        text: error?.message || "Failed to save lab result.",
+      });
+    } finally {
+      setSavingLabResult(false);
+    }
+  };
+
+  const handleUpdateLabNotes = async (resultId: string) => {
+    setLabFeedback(null);
+    try {
+      await learningDataService.updateLabResult(resultId, {
+        notes: editLabNotes.trim(),
+      });
+      setSavedLabResults((prev) =>
+        prev.map((item) =>
+          item.id === resultId ? { ...item, notes: editLabNotes.trim() } : item
+        )
+      );
+      setEditingLabId(null);
+      setLabFeedback({ type: "success", text: "Lab notes updated." });
+    } catch (error: any) {
+      setLabFeedback({
+        type: "error",
+        text: error?.message || "Failed to update lab notes.",
+      });
+    }
+  };
+
+  const handleDeleteLabResult = async (resultId: string) => {
+    setLabFeedback(null);
+    try {
+      await learningDataService.deleteLabResult(resultId);
+      setSavedLabResults((prev) => prev.filter((item) => item.id !== resultId));
+      setLabFeedback({ type: "success", text: "Lab result removed." });
+    } catch (error: any) {
+      setLabFeedback({
+        type: "error",
+        text: error?.message || "Failed to delete lab result.",
+      });
+    }
+  };
+
   const resetBeaker = () => {
     setBeaker([]);
     setDnaExtractionStage("none");
@@ -1233,7 +1345,7 @@ export default function VirtualLab({
         }
       `}</style>
       {/* Top Navigation - Zperiod Style */}
-      <div className="flex bg-card/80 backdrop-blur-xl border border-border/50 p-1 rounded-2xl w-full max-w-3xl mx-auto shadow-2xl overflow-hidden no-scrollbar-x">
+      <div className="flex bg-card/80 backdrop-blur-xl border border-border/50 p-1 rounded-2xl w-full max-w-3xl mx-auto shadow-2xl overflow-x-auto scrollbar-hide md:overflow-hidden no-scrollbar-x">
         {[
           { id: "periodic", icon: <LayoutGrid size={16} />, label: "Table" },
           { id: "lab", icon: <FlaskRound size={16} />, label: "Lab" },
@@ -1266,10 +1378,11 @@ export default function VirtualLab({
                 item.id === "lab" ||
                 item.id === "anatomy" ||
                 item.id === "guides" ||
-                item.id === "molecules"
+                item.id === "molecules" ||
+                item.id === "journal"
               );
             if (subject === "physics")
-              return item.id === "lab" || item.id === "guides";
+              return item.id === "lab" || item.id === "guides" || item.id === "journal";
             if (subject === "chemistry")
               return (
                 item.id === "lab" ||
@@ -1278,13 +1391,6 @@ export default function VirtualLab({
                 item.id === "guides" ||
                 item.id === "journal"
               );
-            // User requested removal of extra chemistry tools
-            if (
-              ["balancer", "molarmass", "solubility", "journal"].includes(
-                item.id,
-              )
-            )
-              return false;
             return true;
           })
           .map((item) => (
@@ -2362,7 +2468,32 @@ export default function VirtualLab({
                         </div>
                       )}
 
-                      <div className="pt-4 flex justify-end">
+                      {labFeedback && (
+                        <p
+                          className={cn(
+                            "text-xs font-bold",
+                            labFeedback.type === "success" ? "text-emerald-400" : "text-red-400",
+                          )}
+                        >
+                          {labFeedback.text}
+                        </p>
+                      )}
+
+                      <div className="pt-4 flex items-center justify-end gap-3">
+                        {user && reaction && (
+                          <button
+                            onClick={() => handleSaveCurrentLabResult(reaction.slice(0, 80), reaction)}
+                            disabled={savingLabResult}
+                            className="px-5 py-2.5 bg-emerald-600 text-white rounded-full text-[10px] font-black uppercase tracking-widest hover:bg-emerald-500 transition-all flex items-center gap-2 disabled:opacity-60"
+                          >
+                            {savingLabResult ? (
+                              <Loader2 size={14} className="animate-spin" />
+                            ) : (
+                              <Save size={14} />
+                            )}
+                            <span>Save Result</span>
+                          </button>
+                        )}
                         <button
                           onClick={() => setShowReactionDialog(false)}
                           className="px-6 py-2.5 bg-primary text-primary-foreground rounded-full text-[10px] font-black uppercase tracking-widest hover:scale-105 active:scale-95 transition-all"
@@ -3009,7 +3140,7 @@ export default function VirtualLab({
                           </h3>
                         </div>
 
-                        <div className="grid grid-cols-3 gap-6 flex-1">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6 flex-1">
                           {ANATOMY_MODELS.map((model) => (
                             <motion.button
                               key={model.id}
@@ -3041,22 +3172,22 @@ export default function VirtualLab({
                     ) : activeTool === "petri" ? (
                       <div className="w-full max-w-4xl bg-card/60 p-6 sm:p-12 rounded-3xl sm:rounded-[4rem] border border-white/5 backdrop-blur-2xl flex flex-col items-center gap-6 sm:gap-12">
                         <div className="relative">
-                          <div className="w-96 h-96 rounded-full border-[12px] border-slate-800 shadow-[20px_20px_60px_rgba(0,0,0,0.5),-20px_-20px_60px_rgba(255,255,255,0.05),inset_0_0_50px_rgba(0,0,0,0.5)] bg-emerald-500/5 relative overflow-hidden flex items-center justify-center">
+                          <div className="w-64 h-64 sm:w-96 sm:h-96 rounded-full border-[8px] sm:border-[12px] border-slate-800 shadow-[20px_20px_60px_rgba(0,0,0,0.5),-20px_-20px_60px_rgba(255,255,255,0.05),inset_0_0_50px_rgba(0,0,0,0.5)] bg-emerald-500/5 relative overflow-hidden flex items-center justify-center">
                             <div className="absolute inset-0 bg-gradient-to-tr from-white/5 to-transparent skew-x-12" />
 
                             {/* Specimen visualization based on selected substance */}
                             {microscopeSlide === "onion" ? (
-                              <div className="w-64 h-64 bg-emerald-400/20 rounded-[2rem] border border-emerald-400/30 rotate-12 blur-sm animate-pulse" />
+                              <div className="w-48 h-48 sm:w-64 sm:h-64 bg-emerald-400/20 rounded-[1.5rem] sm:rounded-[2rem] border border-emerald-400/30 rotate-12 blur-sm animate-pulse" />
                             ) : microscopeSlide === "petri" ? (
-                              <div className="w-64 h-64 bg-emerald-500/20 rounded-full border border-emerald-500/30 blur-sm flex items-center justify-center animate-pulse">
-                                <div className="w-32 h-32 bg-emerald-400/30 rounded-full blur-md" />
+                              <div className="w-48 h-48 sm:w-64 sm:h-64 bg-emerald-500/20 rounded-full border border-emerald-500/30 blur-sm flex items-center justify-center animate-pulse">
+                                <div className="w-24 h-24 sm:w-32 sm:h-32 bg-emerald-400/30 rounded-full blur-md" />
                               </div>
                             ) : microscopeSlide === "none" ? (
-                              <p className="text-white/10 text-xs font-black uppercase tracking-widest text-center">
+                              <p className="text-white/10 text-[10px] sm:text-xs font-black uppercase tracking-widest text-center px-4">
                                 Place specimen for culturing
                               </p>
                             ) : (
-                              <div className="w-48 h-48 bg-red-400/20 rounded-full border border-red-400/30 blur-md animate-pulse" />
+                              <div className="w-36 h-36 sm:w-48 sm:h-48 bg-red-400/20 rounded-full border border-red-400/30 blur-md animate-pulse" />
                             )}
                           </div>
                           <div className="absolute -top-4 -right-4 w-20 h-20 rounded-full bg-slate-900 border-4 border-slate-800 flex items-center justify-center text-emerald-400 shadow-xl">
@@ -3094,8 +3225,8 @@ export default function VirtualLab({
                         </div>
                       </div>
                     ) : activeTool === "microscope" ? (
-                      <div className="relative">
-                        <div className="relative w-[520px] h-[520px] rounded-full border-[1.5rem] border-slate-900 shadow-[0_0_100px_rgba(0,0,0,0.8),inset_0_0_50px_rgba(0,0,0,0.5)] overflow-hidden bg-black">
+                      <div className="flex flex-col lg:flex-row items-center gap-8 relative w-full max-w-5xl justify-center">
+                        <div className="relative w-72 h-72 sm:w-96 sm:h-96 md:w-[520px] md:h-[520px] rounded-full border-[1rem] sm:border-[1.5rem] border-slate-900 shadow-[0_0_100px_rgba(0,0,0,0.8),inset_0_0_50px_rgba(0,0,0,0.5)] overflow-hidden bg-black shrink-0">
                           {microscopeSlide === "none" ? (
                             <div className="w-full h-full flex flex-col items-center justify-center text-emerald-500/20 gap-4">
                               <Search size={64} className="animate-pulse" />
@@ -3139,9 +3270,9 @@ export default function VirtualLab({
                           )}
 
                           {/* Peripheral Controls */}
-                          <div className="absolute bottom-10 inset-x-0 flex items-center justify-center gap-6 z-20">
-                            <div className="bg-black/80 backdrop-blur-md p-4 rounded-3xl border border-white/10 space-y-3 w-40">
-                              <p className="text-[8px] font-black text-emerald-400 uppercase tracking-widest text-center">
+                          <div className="absolute bottom-6 sm:bottom-10 inset-x-0 flex items-center justify-center gap-3 sm:gap-6 z-20 px-4">
+                            <div className="bg-black/80 backdrop-blur-md p-2 sm:p-4 rounded-2xl sm:rounded-3xl border border-white/10 space-y-1.5 sm:space-y-3 w-28 sm:w-40 shrink-0">
+                              <p className="text-[7px] sm:text-[8px] font-black text-emerald-400 uppercase tracking-widest text-center">
                                 Optical Zoom
                               </p>
                               <input
@@ -3156,8 +3287,8 @@ export default function VirtualLab({
                                 className="w-full h-1 appearance-none bg-emerald-950 rounded-full accent-emerald-400"
                               />
                             </div>
-                            <div className="bg-black/80 backdrop-blur-md p-4 rounded-3xl border border-white/10 space-y-3 w-40">
-                              <p className="text-[8px] font-black text-emerald-400 uppercase tracking-widest text-center">
+                            <div className="bg-black/80 backdrop-blur-md p-2 sm:p-4 rounded-2xl sm:rounded-3xl border border-white/10 space-y-1.5 sm:space-y-3 w-28 sm:w-40 shrink-0">
+                              <p className="text-[7px] sm:text-[8px] font-black text-emerald-400 uppercase tracking-widest text-center">
                                 Illumination
                               </p>
                               <input
@@ -3176,9 +3307,9 @@ export default function VirtualLab({
 
                         {microscopeSlide !== "none" && (
                           <motion.div
-                            initial={{ opacity: 0, x: 20 }}
-                            animate={{ opacity: 1, x: 0 }}
-                            className="absolute top-10 right-6 w-72 p-6 bg-slate-950/90 border border-emerald-500/30 rounded-[2.5rem] space-y-5 shadow-[0_0_50px_rgba(16,185,129,0.15)] backdrop-blur-2xl z-50"
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="w-full lg:w-72 p-6 bg-slate-950/90 border border-emerald-500/30 rounded-[2.5rem] space-y-5 shadow-[0_0_50px_rgba(16,185,129,0.15)] backdrop-blur-2xl z-50 lg:absolute lg:top-10 lg:-right-36 xl:-right-52"
                           >
                             <div className="flex items-center justify-between">
                               <div className="space-y-1">
@@ -4031,63 +4162,225 @@ export default function VirtualLab({
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 1.05 }}
-            className="p-10 bg-card border border-border rounded-[3rem] min-h-[600px] flex flex-col"
+            className="p-10 bg-card border border-border rounded-[3rem] min-h-[600px] flex flex-col gap-10"
           >
-            <div className="flex items-center gap-4 mb-8">
-              <div className="w-12 h-12 rounded-xl bg-primary/10 text-primary flex items-center justify-center">
-                <RotateCcw size={24} />
-              </div>
-              <div>
-                <h2 className="text-2xl font-black italic tracking-tighter">
-                  Discovery Journal
-                </h2>
-                <p className="text-muted-foreground text-xs font-medium">
-                  Your successful chemical combinations and stoichiometric
-                  observations.
-                </p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {discoveredReactions.length === 0 ? (
-                <div className="col-span-full flex flex-col items-center justify-center py-20 text-muted-foreground/20 italic">
-                  <FlaskConical size={64} className="mb-4 opacity-10" />
-                  <p className="text-lg font-black uppercase tracking-widest">
-                    Awaiting Discoveries
-                  </p>
-                  <p className="text-xs">
-                    Perform experiments in the lab to populate your journal.
-                  </p>
+            <div>
+              <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-xl bg-primary/10 text-primary flex items-center justify-center">
+                    <RotateCcw size={24} />
+                  </div>
+                  <div>
+                    <h2 className="text-2xl font-black italic tracking-tighter">
+                      Discovery Journal & Cloud Lab Log
+                    </h2>
+                    <p className="text-muted-foreground text-xs font-medium">
+                      Save your lab observations, measurements, and notes to Firestore.
+                    </p>
+                  </div>
                 </div>
-              ) : (
-                discoveredReactions.map((r, i) => (
-                  <motion.div
-                    key={i}
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: i * 0.05 }}
-                    className="p-6 bg-muted/30 border border-border rounded-3xl hover:border-primary/50 transition-all flex flex-col gap-4 group"
+                {user && (
+                  <button
+                    onClick={fetchSavedLabResults}
+                    disabled={loadingLabResults}
+                    className="px-4 py-2 rounded-xl border border-border text-xs font-bold hover:bg-muted transition-all flex items-center gap-2"
                   >
-                    <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-black uppercase tracking-widest text-primary">
-                        Discovery_{discoveredReactions.length - i}
-                      </span>
-                      <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
-                    </div>
-                    <h4 className="text-sm font-bold leading-tight group-hover:text-primary transition-colors">
-                      {r}
-                    </h4>
-                    <div className="flex items-center gap-2 mt-auto pt-4 border-t border-border/50">
-                      <div className="w-6 h-6 rounded-lg bg-green-500/10 text-green-500 flex items-center justify-center">
-                        <Droplet size={12} />
-                      </div>
-                      <span className="text-[8px] font-black uppercase tracking-widest opacity-40">
-                        Verified Reaction
-                      </span>
-                    </div>
-                  </motion.div>
-                ))
+                    <RotateCcw size={14} className={loadingLabResults ? "animate-spin" : ""} />
+                    <span>Refresh</span>
+                  </button>
+                )}
+              </div>
+
+              {labFeedback && (
+                <div
+                  className={cn(
+                    "mb-6 p-3 rounded-xl text-xs font-bold border",
+                    labFeedback.type === "success"
+                      ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-500"
+                      : "bg-red-500/10 border-red-500/20 text-red-500",
+                  )}
+                >
+                  {labFeedback.text}
+                </div>
               )}
+
+              {user && (
+                <div className="p-5 rounded-2xl bg-muted/20 border border-border mb-8 grid grid-cols-1 md:grid-cols-4 gap-3 items-center">
+                  <input
+                    type="text"
+                    value={customLabTitle}
+                    onChange={(e) => setCustomLabTitle(e.target.value)}
+                    maxLength={120}
+                    placeholder="Experiment title..."
+                    className="px-4 py-2.5 rounded-xl bg-background border border-border text-sm font-semibold"
+                  />
+                  <input
+                    type="text"
+                    value={customLabOutcome}
+                    onChange={(e) => setCustomLabOutcome(e.target.value)}
+                    maxLength={1000}
+                    placeholder="Observed result or measurement..."
+                    className="md:col-span-2 px-4 py-2.5 rounded-xl bg-background border border-border text-sm"
+                  />
+                  <button
+                    onClick={() => handleSaveCurrentLabResult(customLabTitle, customLabOutcome)}
+                    disabled={savingLabResult || !customLabOutcome.trim()}
+                    className="px-5 py-2.5 rounded-xl bg-primary text-primary-foreground text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    {savingLabResult ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                    <span>Log Lab Result</span>
+                  </button>
+                </div>
+              )}
+
+              <h3 className="text-xs font-black uppercase tracking-widest text-muted-foreground mb-4">
+                Saved Lab Results ({savedLabResults.length})
+              </h3>
+              {loadingLabResults ? (
+                <div className="py-8 flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 size={16} className="animate-spin" />
+                  <span>Loading saved lab results...</span>
+                </div>
+              ) : savedLabResults.length === 0 ? (
+                <p className="text-sm text-muted-foreground mb-8">
+                  No cloud-saved lab results yet. Simulate an experiment and click Save Result, or log an observation above.
+                </p>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 mb-10">
+                  {savedLabResults.map((item) => {
+                    const isEditing = editingLabId === item.id;
+                    return (
+                      <div
+                        key={item.id}
+                        className="p-5 bg-muted/30 border border-border rounded-3xl flex flex-col gap-3"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[10px] font-black uppercase tracking-widest text-primary">
+                            {item.subject}
+                          </span>
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => {
+                                setEditingLabId(item.id);
+                                setEditLabNotes(item.notes || "");
+                              }}
+                              aria-label="Edit lab notes"
+                              className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground"
+                            >
+                              <Edit3 size={14} />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteLabResult(item.id)}
+                              aria-label="Delete lab result"
+                              className="p-1.5 rounded-lg hover:bg-red-500/10 text-red-500"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </div>
+                        <h4 className="font-bold text-sm leading-snug">{item.experimentTitle}</h4>
+                        <p className="text-xs text-foreground/80">{item.outcome}</p>
+                        {item.formula && (
+                          <p className="text-[11px] font-mono text-primary bg-primary/5 px-2.5 py-1 rounded-lg">
+                            {item.formula}
+                          </p>
+                        )}
+                        {item.measurements && (
+                          <p className="text-[11px] text-muted-foreground">{item.measurements}</p>
+                        )}
+                        {isEditing ? (
+                          <div className="space-y-2 pt-2 border-t border-border/50">
+                            <textarea
+                              value={editLabNotes}
+                              onChange={(e) => setEditLabNotes(e.target.value)}
+                              rows={2}
+                              maxLength={1000}
+                              placeholder="Lab notes..."
+                              className="w-full px-3 py-2 rounded-xl bg-background border border-border text-xs"
+                            />
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => handleUpdateLabNotes(item.id)}
+                                className="px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-bold"
+                              >
+                                Save Notes
+                              </button>
+                              <button
+                                onClick={() => setEditingLabId(null)}
+                                className="px-3 py-1.5 rounded-lg bg-muted text-xs font-bold"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          item.notes && (
+                            <p className="text-xs italic text-muted-foreground pt-2 border-t border-border/50 mt-auto">
+                              {item.notes}
+                            </p>
+                          )
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              <h3 className="text-xs font-black uppercase tracking-widest text-muted-foreground mb-4">
+                Session Discoveries ({discoveredReactions.length})
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {discoveredReactions.length === 0 ? (
+                  <div className="col-span-full flex flex-col items-center justify-center py-12 text-muted-foreground/30 italic">
+                    <FlaskConical size={48} className="mb-3 opacity-20" />
+                    <p className="text-sm font-black uppercase tracking-widest">
+                      Awaiting Discoveries
+                    </p>
+                    <p className="text-xs">
+                      Perform experiments in the lab to populate session discoveries.
+                    </p>
+                  </div>
+                ) : (
+                  discoveredReactions.map((r, i) => (
+                    <motion.div
+                      key={i}
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: i * 0.05 }}
+                      className="p-6 bg-muted/30 border border-border rounded-3xl hover:border-primary/50 transition-all flex flex-col gap-4 group"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-black uppercase tracking-widest text-primary">
+                          Discovery_{discoveredReactions.length - i}
+                        </span>
+                        <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
+                      </div>
+                      <h4 className="text-sm font-bold leading-tight group-hover:text-primary transition-colors">
+                        {r}
+                      </h4>
+                      <div className="flex items-center justify-between gap-2 mt-auto pt-4 border-t border-border/50">
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-lg bg-green-500/10 text-green-500 flex items-center justify-center">
+                            <Droplet size={12} />
+                          </div>
+                          <span className="text-[8px] font-black uppercase tracking-widest opacity-40">
+                            Verified Reaction
+                          </span>
+                        </div>
+                        {user && (
+                          <button
+                            onClick={() => handleSaveCurrentLabResult(r.slice(0, 80), r)}
+                            disabled={savingLabResult}
+                            className="px-3 py-1 rounded-lg bg-primary/10 text-primary text-[10px] font-black uppercase tracking-wider hover:bg-primary hover:text-primary-foreground transition-all"
+                          >
+                            Save
+                          </button>
+                        )}
+                      </div>
+                    </motion.div>
+                  ))
+                )}
+              </div>
             </div>
           </motion.div>
         ) : (

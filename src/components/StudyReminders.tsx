@@ -32,6 +32,7 @@ export default function StudyReminders({ onClose }: StudyRemindersProps) {
   const [date, setDate] = useState('');
   const [time, setTime] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
     if (user) {
@@ -57,6 +58,7 @@ export default function StudyReminders({ onClose }: StudyRemindersProps) {
     if (!user || !topic || !date || !time) return;
 
     setSubmitting(true);
+    setErrorMsg(null);
     try {
       const reminderTime = new Date(`${date}T${time}`);
       await dbService.createReminder({
@@ -69,9 +71,9 @@ export default function StudyReminders({ onClose }: StudyRemindersProps) {
       setDate('');
       setTime('');
       loadReminders();
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
-      alert('Failed to set reminder. Check your connection.');
+      setErrorMsg(error?.message || 'Failed to set reminder. Check your connection.');
     } finally {
       setSubmitting(false);
     }
@@ -89,70 +91,96 @@ export default function StudyReminders({ onClose }: StudyRemindersProps) {
   const subjects: Subject[] = ['computer', 'physics', 'biology', 'chemistry'];
 
   return (
-    <div className="space-y-8 p-1">
-      <div className="flex items-center justify-between">
-        <h2 className="text-3xl font-black italic uppercase tracking-tighter flex items-center gap-4">
-          <Bell className="text-primary" size={32} strokeWidth={3} />
-          Study Pulse
-        </h2>
-        <button 
+    <div className="space-y-6 p-1">
+      <div className="flex items-center justify-between pr-8">
+        <div>
+          <h2 className="text-xl font-bold tracking-tight text-foreground flex items-center gap-2.5">
+            <Bell className="text-primary" size={20} />
+            Study Reminders
+          </h2>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Schedule study sessions across your subjects
+          </p>
+        </div>
+        <button
+          type="button"
           onClick={() => setShowAdd(true)}
-          className="p-4 bg-primary text-primary-foreground rounded-2xl hover:scale-105 transition-all shadow-xl shadow-primary/20"
+          className="px-3.5 py-2 bg-primary text-primary-foreground rounded-xl text-xs font-semibold hover:opacity-90 transition-opacity flex items-center gap-1.5 whitespace-nowrap shrink-0"
         >
-          <Plus size={24} strokeWidth={3} />
+          <Plus size={15} />
+          <span>New Reminder</span>
         </button>
       </div>
 
-      <div className="grid grid-cols-1 gap-4">
+      <div className="divide-y divide-border border-t border-border">
         {loading ? (
-          <div className="py-20 text-center opacity-30">
-            <Clock className="mx-auto mb-4 animate-pulse" size={48} />
-            <p className="text-[10px] font-black uppercase tracking-[0.4em]">Syncing temporal data...</p>
+          <div className="py-12 text-center text-muted-foreground space-y-2">
+            <Clock className="mx-auto opacity-50" size={28} />
+            <p className="text-xs">Loading reminders...</p>
           </div>
         ) : reminders.length === 0 ? (
-          <div className="py-20 text-center border-4 border-dashed border-border/20 rounded-[3rem] bg-muted/5">
-            <p className="text-xs font-black italic uppercase text-muted-foreground tracking-[0.3em] opacity-40">No active reminders in the sector.</p>
+          <div className="py-12 text-center space-y-3">
+            <p className="text-sm text-muted-foreground">No study reminders scheduled yet.</p>
+            <button
+              type="button"
+              onClick={() => setShowAdd(true)}
+              className="px-4 py-2 rounded-xl bg-muted text-foreground text-xs font-medium hover:bg-muted/80 transition-colors"
+            >
+              Schedule your first reminder
+            </button>
           </div>
         ) : (
-          reminders.map(reminder => (
-            <motion.div 
+          reminders.map((reminder) => (
+            <motion.div
               key={reminder.id}
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
               className={cn(
-                "p-6 border-4 border-border rounded-[2.5rem] bg-card shadow-xl flex items-center justify-between group hover:border-primary transition-all",
-                reminder.isNotified && "opacity-50 grayscale-[0.5]"
+                'py-3.5 flex items-center justify-between gap-4 group',
+                reminder.isNotified && 'opacity-60'
               )}
             >
-              <div className="flex items-center gap-6">
-                <div className={cn(
-                  "w-16 h-16 rounded-[1.5rem] flex items-center justify-center shadow-inner",
-                  reminder.subject === 'computer' ? 'bg-blue-500/10 text-blue-500' :
-                  reminder.subject === 'physics' ? 'bg-purple-500/10 text-purple-500' :
-                  reminder.subject === 'biology' ? 'bg-emerald-500/10 text-emerald-500' :
-                  'bg-red-500/10 text-red-500'
-                )}>
-                  <BookOpen size={28} strokeWidth={3} />
+              <div className="flex items-center gap-3.5 min-w-0">
+                <div
+                  className={cn(
+                    'w-10 h-10 rounded-xl flex items-center justify-center shrink-0',
+                    reminder.subject === 'computer'
+                      ? 'bg-sky-500/10 text-sky-600 dark:text-sky-400'
+                      : reminder.subject === 'physics'
+                        ? 'bg-violet-500/10 text-violet-600 dark:text-violet-400'
+                        : reminder.subject === 'biology'
+                          ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                          : 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
+                  )}
+                >
+                  <BookOpen size={18} />
                 </div>
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <p className="text-lg font-black italic uppercase tracking-tighter leading-none">{reminder.topic}</p>
-                    {reminder.isNotified && <CheckCircle2 size={16} className="text-emerald-500" />}
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-semibold text-foreground truncate">{reminder.topic}</p>
+                    {reminder.isNotified && (
+                      <CheckCircle2 size={14} className="text-emerald-600 dark:text-emerald-400 shrink-0" />
+                    )}
                   </div>
-                  <div className="flex items-center gap-3">
-                    <span className="text-[10px] font-black uppercase tracking-widest text-muted-foreground opacity-60">{reminder.subject}</span>
-                    <div className="w-1 h-1 rounded-full bg-border" />
-                    <span className="text-[10px] font-black uppercase tracking-widest text-primary">
-                      {format(new Date(reminder.time.seconds ? reminder.time.seconds * 1000 : reminder.time), 'MMM d, h:mm a')}
+                  <p className="text-xs text-muted-foreground capitalize">
+                    {reminder.subject}
+                    <span aria-hidden="true"> · </span>
+                    <span className="tabular-nums">
+                      {format(
+                        new Date(reminder.time.seconds ? reminder.time.seconds * 1000 : reminder.time),
+                        'MMM d, h:mm a'
+                      )}
                     </span>
-                  </div>
+                  </p>
                 </div>
               </div>
-              <button 
+              <button
+                type="button"
                 onClick={() => handleDelete(reminder.id)}
-                className="p-4 rounded-xl bg-muted/50 text-muted-foreground hover:bg-red-500 hover:text-white transition-all opacity-0 group-hover:opacity-100"
+                aria-label={`Delete reminder ${reminder.topic}`}
+                className="p-2 rounded-lg text-muted-foreground hover:text-red-600 dark:hover:text-red-400 hover:bg-muted transition-colors shrink-0"
               >
-                <Trash2 size={20} />
+                <Trash2 size={16} />
               </button>
             </motion.div>
           ))
@@ -161,76 +189,90 @@ export default function StudyReminders({ onClose }: StudyRemindersProps) {
 
       <AnimatePresence>
         {showAdd && (
-          <div className="fixed inset-0 z-[300] flex items-center justify-center bg-background/80 backdrop-blur-md p-6">
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+          <div className="fixed inset-0 z-[500] flex items-center justify-center bg-background/80 backdrop-blur-md p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96, y: 12 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="max-w-md w-full bg-card border-2 md:border-4 border-border p-6 sm:p-10 rounded-3xl sm:rounded-[4rem] shadow-2xl relative"
+              exit={{ opacity: 0, scale: 0.96, y: 12 }}
+              className="max-w-md w-full bg-card border border-border p-6 rounded-2xl shadow-2xl relative"
             >
-              <button 
+              <button
+                type="button"
                 onClick={() => setShowAdd(false)}
-                className="absolute top-6 right-6 p-3 rounded-full hover:bg-muted transition-colors"
+                aria-label="Close new reminder form"
+                className="absolute top-5 right-5 p-2 rounded-xl hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
               >
-                <CloseIcon size={24} />
+                <CloseIcon size={18} />
               </button>
 
-              <h3 className="text-4xl font-black italic uppercase tracking-tighter mb-8">Deploy Reminder</h3>
+              <h3 className="text-lg font-bold tracking-tight text-foreground mb-5">
+                New Study Reminder
+              </h3>
 
-              <form onSubmit={handleAddReminder} className="space-y-6">
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black uppercase tracking-widest text-muted-foreground ml-2">Sector / Subject</label>
-                  <select 
+              {errorMsg && (
+                <div className="mb-4 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400 text-xs font-medium">
+                  {errorMsg}
+                </div>
+              )}
+
+              <form onSubmit={handleAddReminder} className="space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-muted-foreground">Subject</label>
+                  <select
                     value={subject}
                     onChange={(e) => setSubject(e.target.value)}
-                    className="w-full p-4 bg-muted border-4 border-border rounded-2xl font-bold uppercase text-[10px] tracking-widest outline-none focus:border-primary transition-all"
+                    className="w-full px-3.5 py-2.5 bg-background border border-border rounded-xl text-sm text-foreground capitalize outline-none focus:ring-2 focus:ring-primary/40"
                   >
-                    {subjects.map(s => <option key={s} value={s}>{s}</option>)}
+                    {subjects.map((s) => (
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
+                    ))}
                     <option value="General">General</option>
                   </select>
                 </div>
 
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black uppercase tracking-widest text-muted-foreground ml-2">Topic Intelligence</label>
-                  <input 
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-muted-foreground">Study Topic</label>
+                  <input
                     type="text"
                     value={topic}
                     onChange={(e) => setTopic(e.target.value)}
-                    placeholder="E.g. Quantum Mechanics Prep"
-                    className="w-full p-4 bg-muted border-4 border-border rounded-2xl font-bold text-sm outline-none focus:border-primary transition-all"
+                    placeholder="e.g. Organic Chemistry Mechanisms"
+                    className="w-full px-3.5 py-2.5 bg-background border border-border rounded-xl text-sm text-foreground outline-none focus:ring-2 focus:ring-primary/40"
                     required
                   />
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black uppercase tracking-widest text-muted-foreground ml-2">Launch Date</label>
-                    <input 
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium text-muted-foreground">Date</label>
+                    <input
                       type="date"
                       value={date}
                       onChange={(e) => setDate(e.target.value)}
-                      className="w-full p-4 bg-muted border-4 border-border rounded-2xl font-bold text-sm outline-none focus:border-primary transition-all"
+                      className="w-full px-3.5 py-2.5 bg-background border border-border rounded-xl text-sm text-foreground outline-none focus:ring-2 focus:ring-primary/40"
                       required
                     />
                   </div>
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black uppercase tracking-widest text-muted-foreground ml-2">Sync Time</label>
-                    <input 
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium text-muted-foreground">Time</label>
+                    <input
                       type="time"
                       value={time}
                       onChange={(e) => setTime(e.target.value)}
-                      className="w-full p-4 bg-muted border-4 border-border rounded-2xl font-bold text-sm outline-none focus:border-primary transition-all"
+                      className="w-full px-3.5 py-2.5 bg-background border border-border rounded-xl text-sm text-foreground outline-none focus:ring-2 focus:ring-primary/40"
                       required
                     />
                   </div>
                 </div>
 
-                <button 
+                <button
                   type="submit"
                   disabled={submitting}
-                  className="w-full py-6 bg-primary text-primary-foreground rounded-[2rem] font-black italic uppercase tracking-tighter text-xl shadow-2xl shadow-primary/20 hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-50"
+                  className="w-full py-3 bg-primary text-primary-foreground rounded-xl text-sm font-semibold hover:opacity-90 transition-opacity disabled:opacity-50"
                 >
-                  {submitting ? 'Calibrating...' : 'Set Study Pulse'}
+                  {submitting ? 'Saving...' : 'Save Reminder'}
                 </button>
               </form>
             </motion.div>

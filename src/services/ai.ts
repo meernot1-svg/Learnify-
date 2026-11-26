@@ -1,197 +1,74 @@
-import { GoogleGenAI, Type } from "@google/genai";
+async function postJson<T>(url: string, body: Record<string, unknown>): Promise<T> {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
 
-const ai = new GoogleGenAI({ 
-  apiKey: process.env.GEMINI_API_KEY,
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
-    }
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data?.error || `Request failed with status ${response.status}`);
   }
-});
+  return data as T;
+}
 
 export const aiService = {
-  async chat(message: string, history: { role: string, parts: { text: string }[] }[] = []) {
-    try {
-      const response = await ai.models.generateContent({
-        model: "gemini-3.5-flash",
-        contents: [...history, { role: 'user', parts: [{ text: message }] }],
-        config: {
-          systemInstruction: "You are EduAI, a friendly and helpful teaching assistant for the EduPulse platform. You help students with subjects like Computer Science, Physics, Chemistry, and Biology. Be concise, clear, and encouraging."
-        }
-      });
-      return response.text || "I'm sorry, I couldn't process that.";
-    } catch (error) {
-      console.error("AI Chat Error:", error);
-      return "AI service is currently unavailable.";
-    }
+  async chat(message: string, history: { role: string; parts: { text: string }[] }[] = []): Promise<string> {
+    const data = await postJson<{ text: string }>('/api/ai/chat', { message, history });
+    return data.text || '';
   },
 
   async generateMcqs(content: string) {
-    try {
-      const response = await ai.models.generateContent({
-        model: "gemini-3.5-flash",
-        contents: `Content: ${content}`,
-        config: {
-          systemInstruction: "Generate 5 multiple choice questions from the provided content. Return only as a JSON array of objects with 'question', 'options' (array of 4 strings), and 'correctIndex' (number from 0-3).",
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                question: { type: Type.STRING },
-                options: { type: Type.ARRAY, items: { type: Type.STRING } },
-                correctIndex: { type: Type.NUMBER }
-              },
-              required: ["question", "options", "correctIndex"]
-            }
-          }
-        }
-      });
-      return JSON.parse(response.text || "[]");
-    } catch (error) {
-      console.error("AI MCQ Error:", error);
-      return [];
-    }
+    const data = await postJson<{ mcqs: any[] }>('/api/ai/mcqs', { content });
+    return data.mcqs || [];
   },
 
   async generateFlashcards(content: string) {
-    try {
-      const response = await ai.models.generateContent({
-        model: "gemini-3.5-flash",
-        contents: `Content: ${content}`,
-        config: {
-          systemInstruction: "Generate 10 educational flashcards from the provided content. Return only as a JSON array of objects with 'front' and 'back'.",
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                front: { type: Type.STRING },
-                back: { type: Type.STRING }
-              },
-              required: ["front", "back"]
-            }
-          }
-        }
-      });
-      return JSON.parse(response.text || "[]");
-    } catch (error) {
-      console.error("AI Flashcards Error:", error);
-      return [];
-    }
+    const data = await postJson<{ flashcards: any[] }>('/api/ai/flashcards', { content });
+    return data.flashcards || [];
   },
 
-  async generateNotes(content: string) {
-    try {
-      const response = await ai.models.generateContent({
-        model: "gemini-3.5-flash",
-        contents: `Content: ${content}`,
-        config: {
-          systemInstruction: "Generate comprehensive study notes based on the provided content. Use Markdown for formatting with clear headings, bullet points, and bold text for key terms. Keep it structured and easy to read."
-        }
-      });
-      return response.text || "Failed to generate notes.";
-    } catch (error) {
-      console.error("AI Notes Error:", error);
-      return "AI service is currently unavailable.";
-    }
+  async generateNotes(content: string): Promise<string> {
+    const data = await postJson<{ text: string }>('/api/ai/notes', { content });
+    return data.text || '';
   },
 
   async generateMcqsFromImage(prompt: string, base64Data: string, mimeType: string) {
-    try {
-      const response = await ai.models.generateContent({
-        model: "gemini-3.5-flash",
-        contents: {
-          parts: [
-            { text: `Context/User Request: ${prompt}` },
-            { inlineData: { data: base64Data, mimeType } }
-          ]
-        },
-        config: {
-          systemInstruction: "You are an educational assessment expert. Generate 5 multiple choice questions based on the provided material. Return only as a JSON array of objects with 'question', 'options' (array of 4 strings), and 'correctIndex' (number from 0-3). Ensure questions are challenging and accurate.",
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                question: { type: Type.STRING },
-                options: { type: Type.ARRAY, items: { type: Type.STRING } },
-                correctIndex: { type: Type.NUMBER }
-              },
-              required: ["question", "options", "correctIndex"]
-            }
-          }
-        }
-      });
-      return JSON.parse(response.text || "[]");
-    } catch (error) {
-      console.error("AI MCQ Image Error:", error);
-      throw error; // Throw so the UI can catch and alert
-    }
+    const data = await postJson<{ mcqs: any[] }>('/api/ai/mcqs', {
+      content: prompt,
+      base64Data,
+      mimeType,
+    });
+    return data.mcqs || [];
   },
 
-  async explainConcept(prompt: string, base64Image?: string, mimeType?: string, instruction?: string) {
-    try {
-      const systemPrompt = instruction || "Answer with clear, structured text and include SVG or Mermaid diagram code if relevant. If you provide diagrams, wrap them in ```mermaid or ```svg blocks.";
-      if (base64Image && mimeType) {
-        const response = await ai.models.generateContent({
-          model: "gemini-3.5-flash",
-          contents: {
-            parts: [
-              { text: `${prompt}. ${systemPrompt}` },
-              { inlineData: { data: base64Image, mimeType } }
-            ]
-          }
-        });
-        return response.text || "Unable to analyze the image.";
-      } else {
-        const response = await ai.models.generateContent({
-          model: "gemini-3.5-flash",
-          contents: `${prompt}. ${systemPrompt}`
-        });
-        return response.text || "Unable to explain the concept.";
-      }
-    } catch (error) {
-      console.error("AI Explainer Error:", error);
-      throw error;
-    }
+  async explainConcept(prompt: string, base64Image?: string, mimeType?: string, instruction?: string): Promise<string> {
+    const data = await postJson<{ text: string }>('/api/ai/explain', {
+      prompt,
+      base64Image,
+      mimeType,
+      instruction,
+    });
+    return data.text || '';
   },
 
-  async explainImage(prompt: string, base64Image: string, mimeType: string, instruction?: string) {
+  async explainImage(prompt: string, base64Image: string, mimeType: string, instruction?: string): Promise<string> {
     return this.explainConcept(prompt, base64Image, mimeType, instruction);
   },
 
-  async predictPaperFromImage(prompt: string, base64Image: string, mimeType: string) {
-    try {
-      const response = await ai.models.generateContent({
-        model: "gemini-3.5-flash",
-        contents: {
-          parts: [
-            { text: `Analyze this past paper and predict important topics and likely questions for the next exam. ${prompt}` },
-            { inlineData: { data: base64Image, mimeType } }
-          ]
-        }
-      });
-      return response.text || "Unable to predict paper patterns.";
-    } catch (error) {
-      console.error("AI Paper Predictor Image Error:", error);
-      throw error;
-    }
+  async predictPaperFromImage(prompt: string, base64Image: string, mimeType: string): Promise<string> {
+    const data = await postJson<{ text: string }>('/api/ai/predict-paper', {
+      content: prompt,
+      base64Image,
+      mimeType,
+    });
+    return data.text || '';
   },
 
-  async predictPaper(pastPaperContent: string) {
-    try {
-      const response = await ai.models.generateContent({
-        model: "gemini-3.5-flash",
-        contents: `Based on the following past paper content, predict important topics and likely questions for the next exam. Format it nicely with headings.\n\nPast Paper Content: ${pastPaperContent}`
-      });
-      return response.text || "Unable to predict paper patterns.";
-    } catch (error) {
-      console.error("AI Paper Predictor Error:", error);
-      throw error;
-    }
-  }
+  async predictPaper(pastPaperContent: string): Promise<string> {
+    const data = await postJson<{ text: string }>('/api/ai/predict-paper', {
+      content: pastPaperContent,
+    });
+    return data.text || '';
+  },
 };

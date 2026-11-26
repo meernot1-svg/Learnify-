@@ -101,7 +101,7 @@ export default function PeriodicTable({ onAddElement }: { onAddElement?: (elemen
 
   return (
     <div className="w-full h-full flex flex-col gap-6">
-      <div className="flex items-end justify-between px-2">
+      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 px-2">
          <div>
             <h2 className="text-4xl font-black italic tracking-tighter text-primary leading-none">Inter_Table</h2>
             <p className="text-muted-foreground text-[10px] uppercase tracking-[0.4em] font-black opacity-40 mt-2">Atomic Data Engine v1.0</p>
@@ -156,48 +156,48 @@ export default function PeriodicTable({ onAddElement }: { onAddElement?: (elemen
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
-                  className="absolute inset-0 bg-background/60 backdrop-blur-md flex items-center justify-center p-12 z-50 rounded-[3rem]"
+                  className="fixed inset-0 bg-background/60 backdrop-blur-md flex items-center justify-center p-4 sm:p-12 z-[350]"
                 >
                    <motion.div 
                      initial={{ scale: 0.9, y: 20 }}
                      animate={{ scale: 1, y: 0 }}
-                     className="bg-card border-2 border-border w-full max-w-4xl rounded-[3rem] shadow-2xl overflow-hidden flex flex-col md:flex-row relative"
+                     className="bg-card border-2 border-border w-full max-w-4xl rounded-2xl sm:rounded-[3rem] shadow-2xl overflow-hidden flex flex-col md:flex-row relative max-h-[90vh] md:max-h-none overflow-y-auto md:overflow-visible"
                    >
                      <button 
                        onClick={() => setSelectedElement(null)}
-                       className="absolute top-6 right-6 p-2 rounded-full bg-muted hover:bg-muted/80 transition-all z-10"
+                       className="absolute top-4 right-4 sm:top-6 sm:right-6 p-2 rounded-full bg-muted hover:bg-muted/80 transition-all z-10"
                      >
                        <X size={20} />
                      </button>
 
                      {/* Left: Element Large Identity */}
-                     <div className={cn("w-full md:w-80 p-12 flex flex-col items-center justify-center text-white text-center gap-6", getCategoryColor(selectedElement.category))}>
-                        <div className="relative">
+                     <div className={cn("w-full md:w-80 p-6 sm:p-12 flex flex-col items-center justify-center text-white text-center gap-6 shrink-0", getCategoryColor(selectedElement.category))}>
+                        <div className="relative mt-4 md:mt-0">
                            <motion.div 
                              animate={{ rotate: [0, 360] }}
                              transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
-                             className="absolute inset-x-[-40px] inset-y-[-40px] rounded-full border-2 border-dashed border-white/20"
+                             className="absolute inset-x-[-30px] inset-y-[-30px] sm:inset-x-[-40px] sm:inset-y-[-40px] rounded-full border-2 border-dashed border-white/20"
                            />
-                           <h3 className="text-8xl font-black tracking-tighter drop-shadow-2xl">{selectedElement.symbol}</h3>
+                           <h3 className="text-6xl sm:text-8xl font-black tracking-tighter drop-shadow-2xl">{selectedElement.symbol}</h3>
                         </div>
                         <div>
-                           <p className="text-4xl font-bold italic tracking-tight">{selectedElement.name}</p>
-                           <p className="text-sm font-bold uppercase tracking-[0.4em] opacity-60 mt-2">{selectedElement.category}</p>
+                           <p className="text-2xl sm:text-4xl font-bold italic tracking-tight">{selectedElement.name}</p>
+                           <p className="text-xs font-bold uppercase tracking-[0.4em] opacity-60 mt-2">{selectedElement.category}</p>
                         </div>
                         <div className="grid grid-cols-2 gap-4 w-full mt-4">
-                           <div className="bg-black/20 p-4 rounded-3xl backdrop-blur-sm">
+                           <div className="bg-black/20 p-3 sm:p-4 rounded-2xl sm:rounded-3xl backdrop-blur-sm">
                               <p className="text-[10px] font-black uppercase opacity-60">Number</p>
-                              <p className="text-xl font-bold">{selectedElement.number}</p>
+                              <p className="text-lg sm:text-xl font-bold">{selectedElement.number}</p>
                            </div>
-                           <div className="bg-black/20 p-4 rounded-3xl backdrop-blur-sm">
+                           <div className="bg-black/20 p-3 sm:p-4 rounded-2xl sm:rounded-3xl backdrop-blur-sm">
                               <p className="text-[10px] font-black uppercase opacity-60">Mass</p>
-                              <p className="text-xl font-bold">{selectedElement.atomic_mass}</p>
+                              <p className="text-lg sm:text-xl font-bold">{selectedElement.atomic_mass}</p>
                            </div>
                         </div>
                      </div>
 
                      {/* Right: Details */}
-                     <div className="flex-1 p-12 overflow-y-auto max-h-[600px] custom-scrollbar">
+                     <div className="flex-1 p-6 sm:p-12 overflow-y-auto max-h-[500px] md:max-h-[600px] custom-scrollbar">
                         <section className="mb-10 text-left">
                            <h4 className="text-xs font-black uppercase tracking-widest text-primary mb-4 flex items-center gap-2">
                               <Info size={14} />

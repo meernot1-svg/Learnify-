@@ -19,6 +19,27 @@ import MCQProvider from './components/MCQProvider';
 import Explainer from './components/Explainer';
 import PaperPredictor from './components/PaperPredictor';
 import MobileNavigation from './components/MobileNavigation';
+import AdminPanel from './components/AdminPanel';
+
+// SEO and Public Pages
+import FreeQuizMaker from './components/seo-pages/FreeQuizMaker';
+import AIQuizMaker from './components/seo-pages/AIQuizMaker';
+import AIExplainer from './components/seo-pages/AIExplainer';
+import TestGenerator from './components/seo-pages/TestGenerator';
+import Flashcards from './components/seo-pages/Flashcards';
+import ChemistryLab from './components/seo-pages/ChemistryLab';
+import PhysicsLab from './components/seo-pages/PhysicsLab';
+import StemMentoring from './components/seo-pages/StemMentoring';
+
+// Legal & Info Pages
+import PrivacyPolicy from './components/seo-pages/PrivacyPolicy';
+import TermsOfService from './components/seo-pages/TermsOfService';
+import AboutUs from './components/seo-pages/AboutUs';
+import ContactUs from './components/seo-pages/ContactUs';
+
+// Blog
+import BlogIndex from './components/seo-pages/BlogIndex';
+import BlogDetail from './components/seo-pages/BlogDetail';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, profile, loading } = useAuth();
@@ -57,6 +78,7 @@ function AppRoutes() {
         <Route path="/" element={<PageWrapper><LandingPage /></PageWrapper>} />
         <Route path="/login" element={<PageWrapper><Login /></PageWrapper>} />
         <Route path="/registration" element={<PageWrapper><Registration /></PageWrapper>} />
+        <Route path="/admin" element={<PageWrapper><AdminPanel /></PageWrapper>} />
         
         <Route path="/dashboard" element={
           <ProtectedRoute>
@@ -94,6 +116,26 @@ function AppRoutes() {
           </ProtectedRoute>
         } />
 
+        {/* Public SEO Feature Pages */}
+        <Route path="/free-quiz-maker" element={<PageWrapper><FreeQuizMaker /></PageWrapper>} />
+        <Route path="/ai-quiz-maker" element={<PageWrapper><AIQuizMaker /></PageWrapper>} />
+        <Route path="/ai-explainer" element={<PageWrapper><AIExplainer /></PageWrapper>} />
+        <Route path="/test-generator" element={<PageWrapper><TestGenerator /></PageWrapper>} />
+        <Route path="/flashcards" element={<PageWrapper><Flashcards /></PageWrapper>} />
+        <Route path="/chemistry-lab" element={<PageWrapper><ChemistryLab /></PageWrapper>} />
+        <Route path="/physics-lab" element={<PageWrapper><PhysicsLab /></PageWrapper>} />
+        <Route path="/stem-mentoring" element={<PageWrapper><StemMentoring /></PageWrapper>} />
+
+        {/* Info & Legal Pages */}
+        <Route path="/privacy-policy" element={<PageWrapper><PrivacyPolicy /></PageWrapper>} />
+        <Route path="/terms-of-service" element={<PageWrapper><TermsOfService /></PageWrapper>} />
+        <Route path="/about-us" element={<PageWrapper><AboutUs /></PageWrapper>} />
+        <Route path="/contact-us" element={<PageWrapper><ContactUs /></PageWrapper>} />
+
+        {/* Academic Blog */}
+        <Route path="/blog" element={<PageWrapper><BlogIndex /></PageWrapper>} />
+        <Route path="/blog/:slug" element={<PageWrapper><BlogDetail /></PageWrapper>} />
+
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>
     </AnimatePresence>
@@ -114,14 +156,18 @@ function PageWrapper({ children }: { children: React.ReactNode }) {
   );
 }
 
+import { ErrorBoundary } from './components/ErrorBoundary';
+
 export default function App() {
   return (
-    <ThemeProvider>
-      <AuthProvider>
-        <Router>
-          <AppRoutes />
-        </Router>
-      </AuthProvider>
-    </ThemeProvider>
+    <ErrorBoundary>
+      <ThemeProvider>
+        <AuthProvider>
+          <Router>
+            <AppRoutes />
+          </Router>
+        </AuthProvider>
+      </ThemeProvider>
+    </ErrorBoundary>
   );
 }

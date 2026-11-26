@@ -5,6 +5,8 @@ import { BookOpen, Users, Brain, FlaskConical, Terminal, GraduationCap } from 'l
 import Header from './Header';
 import { Logo } from './Logo';
 import { useAuth } from '../hooks/useAuth';
+import SEO from './SEO';
+import Footer from './Footer';
 
 export default function LandingPage() {
   const { user, profile } = useAuth();
@@ -28,8 +30,39 @@ export default function LandingPage() {
     }
   };
 
+  const SITE_URL = (import.meta as any).env.VITE_SITE_URL || (typeof window !== 'undefined' ? window.location.origin : 'https://applet-orpin.vercel.app');
+
+  const homepageSchema = [
+    {
+      "@context": "https://schema.org",
+      "@type": "Organization",
+      "@id": `${SITE_URL}/#organization`,
+      "name": "Learnify",
+      "url": SITE_URL,
+      "logo": "https://lh3.googleusercontent.com/d/1mjlHJVtQeSVVmtFMkFwLLCs_ZRMfaOrf",
+      "sameAs": []
+    },
+    {
+      "@context": "https://schema.org",
+      "@type": "WebSite",
+      "@id": `${SITE_URL}/#website`,
+      "url": SITE_URL,
+      "name": "Learnify",
+      "description": "Smart Virtual Labs & AI Learning Platform",
+      "publisher": {
+        "@id": `${SITE_URL}/#organization`
+      }
+    }
+  ];
+
   return (
     <div className="min-h-screen bg-background relative overflow-hidden selection:bg-primary/30">
+      <SEO 
+        title="Learnify | Free AI Quiz Maker & Interactive Chemistry Lab Online"
+        description="Master science and tech with Learnify: featuring interactive physics and chemistry virtual labs, AI-powered quiz makers, study reminders, and direct mentoring."
+        canonicalPath="/"
+        schema={homepageSchema}
+      />
       <Header />
 
       {/* Hero Section */}
@@ -62,11 +95,11 @@ export default function LandingPage() {
             transition={{ duration: 0.8, delay: 0.2 }}
             className="max-w-4xl relative z-10 md:translate-x-24"
           >
-            <h1 className="text-[65px] md:text-[100px] leading-[0.9] font-[900] m-0 tracking-tighter mb-4 drop-shadow-sm">
+            <h1 className="text-[40px] sm:text-[65px] md:text-[100px] leading-[0.9] font-[900] m-0 tracking-tighter mb-4 drop-shadow-sm">
               Unlock Your <br/>
               <span className="text-[#f4b400]">Potential</span>
             </h1>
-            <h2 className="text-[55px] md:text-[90px] leading-none text-foreground font-[800] m-0 tracking-tighter mb-10 opacity-90">
+            <h2 className="text-[35px] sm:text-[55px] md:text-[90px] leading-none text-foreground font-[800] m-0 tracking-tighter mb-10 opacity-90">
               with Learnify
             </h2>
             
@@ -74,21 +107,24 @@ export default function LandingPage() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ delay: 0.6 }}
-              className="text-[20px] md:text-[22px] text-muted-foreground/90 max-w-2xl mx-auto mb-14 font-medium leading-relaxed"
+              className="text-[16px] sm:text-[20px] md:text-[22px] text-muted-foreground/90 max-w-2xl mx-auto mb-14 font-medium leading-relaxed px-4"
             >
-              EduPulse is the ultimate ecosystem for interactive mastery. 
+              Learnify is the ultimate ecosystem for interactive mastery. 
               Engineered for deep-learning retention and high-frequency engagement.
             </motion.p>
             
-            <div className="flex flex-col sm:flex-row gap-6 justify-center items-center">
+            <div className="flex flex-col sm:flex-row gap-4 sm:gap-6 justify-center items-center">
               <button
                 onClick={handleGetStarted}
-                className="group relative px-12 py-6 rounded-2xl bg-primary text-primary-foreground font-black text-base uppercase tracking-widest hover:shadow-2xl hover:shadow-primary/40 transition-all transform hover:-translate-y-1 overflow-hidden"
+                className="w-full sm:w-auto group relative px-10 sm:px-12 py-5 sm:py-6 rounded-2xl bg-primary text-primary-foreground font-black text-sm sm:text-base uppercase tracking-widest hover:shadow-2xl hover:shadow-primary/40 transition-all transform hover:-translate-y-1 overflow-hidden"
               >
                 <div className="absolute inset-0 bg-white/10 translate-y-full group-hover:translate-y-0 transition-transform duration-300" />
                 <span className="relative z-10">Initialize Journey</span>
               </button>
-              <button className="px-12 py-6 rounded-2xl border-2 border-border font-black text-base uppercase tracking-widest hover:bg-muted transition-all">
+              <button
+                onClick={() => navigate('/about-us')}
+                className="w-full sm:w-auto px-10 sm:px-12 py-5 sm:py-6 rounded-2xl border-2 border-border font-black text-sm sm:text-base uppercase tracking-widest hover:bg-muted transition-all"
+              >
                 System Manual
               </button>
             </div>
@@ -100,8 +136,8 @@ export default function LandingPage() {
       </section>
 
       {/* Stats Section */}
-      <section className="py-20 border-y border-border/50 bg-muted/20">
-        <div className="max-w-7xl mx-auto px-6 grid grid-cols-2 md:grid-cols-4 gap-8">
+      <section className="py-16 border-y border-border/50 bg-muted/20">
+        <div className="max-w-7xl mx-auto px-6 grid grid-cols-2 lg:grid-cols-4 gap-8">
           <StatItem value="15k+" label="Active Cadets" />
           <StatItem value="250+" label="Verified Mentors" />
           <StatItem value="1.2k+" label="Simulations" />
@@ -110,10 +146,10 @@ export default function LandingPage() {
       </section>
 
       {/* Features Bento Grid */}
-      <section className="py-32 px-6 max-w-7xl mx-auto relative z-10">
-        <div className="flex flex-col md:flex-row justify-between items-end mb-16 gap-6">
+      <section className="py-20 md:py-32 px-6 max-w-7xl mx-auto relative z-10">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-16 gap-6">
           <div className="max-w-xl">
-            <h2 className="text-4xl md:text-6xl font-black tracking-tighter mb-6 uppercase">CORE MODULES</h2>
+            <h2 className="text-3xl md:text-6xl font-black tracking-tighter mb-4 uppercase">CORE MODULES</h2>
             <p className="text-muted-foreground font-medium">Engineered for deep-learning retention and high-frequency engagement.</p>
           </div>
           <div className="flex gap-2">
@@ -123,7 +159,7 @@ export default function LandingPage() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-12 gap-6 auto-rows-[240px]">
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-6 auto-rows-auto md:auto-rows-[240px]">
           <BentoCard 
             className="md:col-span-8 md:row-span-2"
             icon={<FlaskConical className="w-10 h-10 text-primary" />}
@@ -156,14 +192,14 @@ export default function LandingPage() {
       </section>
 
       {/* CTA Section */}
-      <section className="py-40 px-6">
-        <div className="max-w-5xl mx-auto p-12 md:p-24 rounded-[3rem] bg-foreground text-background relative overflow-hidden">
+      <section className="py-20 md:py-40 px-6">
+        <div className="max-w-5xl mx-auto p-8 sm:p-12 md:p-24 rounded-3xl sm:rounded-[3rem] bg-foreground text-background relative overflow-hidden">
           <div className="absolute top-0 right-0 w-[40rem] h-[40rem] bg-primary/20 rounded-full blur-[120px] -translate-y-1/2 translate-x-1/2" />
           <div className="relative z-10 text-center">
-            <h2 className="text-5xl md:text-7xl font-black tracking-tighter mb-10 leading-tight">READY TO TRIGGER <br/> THE FUTURE?</h2>
+            <h2 className="text-3xl sm:text-5xl md:text-7xl font-black tracking-tighter mb-8 sm:mb-10 leading-tight">READY TO TRIGGER <br/> THE FUTURE?</h2>
             <button 
               onClick={handleGetStarted}
-              className="px-12 py-6 rounded-2xl bg-primary text-primary-foreground font-black uppercase tracking-widest hover:scale-110 shadow-2xl shadow-primary/40 transition-all"
+              className="px-8 sm:px-12 py-4 sm:py-6 rounded-2xl bg-primary text-primary-foreground font-black text-sm sm:text-base uppercase tracking-widest hover:scale-105 sm:hover:scale-110 shadow-2xl shadow-primary/40 transition-all"
             >
               Initialize Node
             </button>
@@ -172,22 +208,7 @@ export default function LandingPage() {
       </section>
 
       {/* Footer */}
-      <footer className="py-20 px-6 border-t border-border">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-10">
-          <div className="flex items-center gap-3 font-black text-2xl tracking-tighter uppercase italic">
-            <Logo className="w-10 h-10" />
-            Learnify
-          </div>
-          <div className="flex gap-8 text-xs font-bold uppercase tracking-widest opacity-60">
-            <a href="#" className="hover:text-primary transition-colors">Privacy</a>
-            <a href="#" className="hover:text-primary transition-colors">Neural Network</a>
-            <a href="#" className="hover:text-primary transition-colors">System Protocols</a>
-          </div>
-          <div className="text-xs font-medium opacity-40">
-            © 2024 LEARNIFY CORE SYSTEMS.
-          </div>
-        </div>
-      </footer>
+      <Footer />
 
       {/* Background Decor */}
       <div className="fixed top-0 left-0 w-full h-full pointer-events-none -z-10 overflow-hidden">
@@ -201,8 +222,8 @@ export default function LandingPage() {
 function StatItem({ value, label }: { value: string, label: string }) {
   return (
     <div className="text-center">
-      <div className="text-4xl md:text-5xl font-black mb-2 tracking-tighter">{value}</div>
-      <div className="text-xs uppercase tracking-widest font-black text-muted-foreground">{label}</div>
+      <div className="text-3xl sm:text-4xl md:text-5xl font-black mb-2 tracking-tighter">{value}</div>
+      <div className="text-[10px] sm:text-xs uppercase tracking-widest font-black text-muted-foreground">{label}</div>
     </div>
   );
 }
@@ -211,18 +232,20 @@ function BentoCard({ className, icon, title, description, tag }: { className?: s
   return (
     <motion.div 
       whileHover={{ y: -8, scale: 1.01 }}
-      className={cn("group p-10 rounded-[2.5rem] border border-border bg-card shadow-sm hover:shadow-2xl transition-all relative overflow-hidden", className)}
+      className={cn("group p-6 sm:p-10 rounded-3xl sm:rounded-[2.5rem] border border-border bg-card shadow-sm hover:shadow-2xl transition-all relative overflow-hidden flex flex-col justify-between", className)}
     >
       <div className="absolute top-6 right-6 px-3 py-1 rounded-full bg-muted text-[10px] font-black uppercase tracking-widest opacity-60 group-hover:opacity-100 group-hover:bg-primary/20 group-hover:text-primary transition-all">
         {tag}
       </div>
-      <div className="mb-10 p-4 rounded-3xl bg-muted w-fit group-hover:bg-primary group-hover:text-primary-foreground transition-all duration-500">
-        {icon}
+      <div>
+        <div className="mb-6 sm:mb-10 p-3 sm:p-4 rounded-2xl sm:rounded-3xl bg-muted w-fit group-hover:bg-primary group-hover:text-primary-foreground transition-all duration-500">
+          {icon}
+        </div>
+        <h3 className="text-xl sm:text-2xl font-black mb-3 sm:mb-4 tracking-tighter uppercase">{title}</h3>
+        <p className="text-sm sm:text-base text-muted-foreground font-medium leading-relaxed">{description}</p>
       </div>
-      <h3 className="text-2xl font-black mb-4 tracking-tighter uppercase">{title}</h3>
-      <p className="text-muted-foreground font-medium leading-relaxed">{description}</p>
       
-      <div className="absolute bottom-8 right-8 translate-x-12 opacity-0 group-hover:translate-x-0 group-hover:opacity-100 transition-all duration-500">
+      <div className="absolute bottom-6 sm:bottom-8 right-6 sm:right-8 translate-x-12 opacity-0 group-hover:translate-x-0 group-hover:opacity-100 transition-all duration-500 hidden sm:block">
         <div className="w-10 h-10 rounded-full bg-primary flex items-center justify-center text-primary-foreground">
           <BookOpen size={18} />
         </div>

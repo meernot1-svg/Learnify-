@@ -58,3 +58,80 @@ export interface StudyReminder {
   isNotified: boolean;
   createdAt: any;
 }
+
+export type LabSubject = 'chemistry' | 'physics' | 'biology';
+
+export interface QuizQuestionItem {
+  question: string;
+  options: string[];
+  correctIndex: number;
+  selectedIndex?: number;
+  explanation?: string;
+}
+
+export interface SavedQuiz {
+  id: string;
+  userId: string;
+  title: string;
+  subject: string;
+  questions: QuizQuestionItem[];
+  score: number;
+  totalQuestions: number;
+  timeSpentSeconds: number;
+  isExamMode: boolean;
+  notes: string;
+  createdAt: any;
+  updatedAt: any;
+}
+
+export interface CreateSavedQuizInput {
+  title: string;
+  subject?: string;
+  questions: QuizQuestionItem[];
+  score: number;
+  totalQuestions?: number;
+  timeSpentSeconds?: number;
+  isExamMode?: boolean;
+  notes?: string;
+}
+
+export interface UpdateSavedQuizInput {
+  title?: string;
+  subject?: string;
+  notes?: string;
+  score?: number;
+  timeSpentSeconds?: number;
+  questions?: QuizQuestionItem[];
+}
+
+export interface LabResult {
+  id: string;
+  userId: string;
+  experimentTitle: string;
+  subject: LabSubject;
+  outcome: string;
+  formula: string;
+  measurements: string;
+  notes: string;
+  createdAt: any;
+  updatedAt: any;
+}
+
+export interface CreateLabResultInput {
+  experimentTitle: string;
+  subject: LabSubject;
+  outcome: string;
+  formula?: string;
+  measurements?: string;
+  notes?: string;
+}
+
+export interface UpdateLabResultInput {
+  experimentTitle?: string;
+  subject?: LabSubject;
+  outcome?: string;
+  formula?: string;
+  measurements?: string;
+  notes?: string;
+}
+

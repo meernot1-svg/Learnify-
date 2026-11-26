@@ -19,21 +19,56 @@ import {
   ExternalLink, 
   X as CloseIcon, 
   AlertCircle,
-  Trophy,
-  Bell,
   CheckCircle
 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-import { dbService } from '../services/db';
-import { storage, db } from '../lib/firebase';
+import { dbService, isAdminEmail } from '../services/db';
+import { storage, db, OperationType, handleFirestoreError } from '../lib/firebase';
 import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
-import { collection, onSnapshot, query, where, orderBy } from 'firebase/firestore';
-import { Material, Course, Progress, Subject, UserProfile, StudyReminder } from '../types';
+import { collection, onSnapshot, query, where } from 'firebase/firestore';
+import { Material, Course, Progress, Subject, UserProfile } from '../types';
 import { cn } from '../lib/utils';
 import MentorVerification from './MentorVerification';
-import StudyReminders from './StudyReminders';
+import StudentDashboard from './StudentDashboard';
 import { format } from 'date-fns';
+
+function getSafeHttpUrl(rawUrl?: string): string | null {
+  if (!rawUrl) return null;
+  try {
+    const parsed = new URL(rawUrl.trim());
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function getYouTubeEmbedUrl(rawUrl: string): string | null {
+  try {
+    const parsed = new URL(rawUrl);
+    const host = parsed.hostname.replace(/^www\./, '');
+    if (host === 'youtu.be') {
+      const id = parsed.pathname.split('/').filter(Boolean)[0];
+      return id ? `https://www.youtube.com/embed/${id}` : null;
+    }
+    if (host === 'youtube.com' || host === 'm.youtube.com' || host === 'youtube-nocookie.com') {
+      if (parsed.pathname.startsWith('/embed/')) {
+        const id = parsed.pathname.split('/')[2];
+        return id ? `https://www.youtube.com/embed/${id}` : null;
+      }
+      if (parsed.pathname === '/watch') {
+        const id = parsed.searchParams.get('v');
+        return id ? `https://www.youtube.com/embed/${id}` : null;
+      }
+      if (parsed.pathname.startsWith('/shorts/')) {
+        const id = parsed.pathname.split('/')[2];
+        return id ? `https://www.youtube.com/embed/${id}` : null;
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 export default function Dashboard() {
   const { profile, isMentorVerified, setMentorVerified } = useAuth();
@@ -46,83 +81,92 @@ export default function Dashboard() {
 }
 
 function MentorDashboard() {
-  const { profile, user } = useAuth();
+  const { user } = useAuth();
+  const isAdmin = isAdminEmail(user?.email);
   const [showUpload, setShowUpload] = useState(false);
   const [students, setStudents] = useState<UserProfile[]>([]);
   const [materials, setMaterials] = useState<Material[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
   const [courseToDelete, setCourseToDelete] = useState<Course | null>(null);
+  const [confirmPurge, setConfirmPurge] = useState(false);
+  const [purging, setPurging] = useState(false);
   const [loading, setLoading] = useState(true);
   const [selectedStudent, setSelectedStudent] = useState<UserProfile | null>(null);
   const [studentProgress, setStudentProgress] = useState<Progress[]>([]);
   const [progressLoading, setProgressLoading] = useState(false);
+  const [badgeInput, setBadgeInput] = useState('');
+  const [awardingBadge, setAwardingBadge] = useState(false);
+  const [promotingUid, setPromotingUid] = useState<string | null>(null);
+  const [statusBanner, setStatusBanner] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  const showStatus = (type: 'success' | 'error', message: string) => {
+    setStatusBanner({ type, message });
+  };
+
+  useEffect(() => {
+    if (!statusBanner) return;
+    const timer = setTimeout(() => setStatusBanner(null), 5000);
+    return () => clearTimeout(timer);
+  }, [statusBanner]);
 
   useEffect(() => {
     if (!user) return;
     
     setLoading(true);
     
-    // Safety timeout for loading state
     const loadingTimeout = setTimeout(() => {
       setLoading(false);
-    }, 4000);
+    }, 5000);
     
-    // Students listener
-    const unsubStudents = onSnapshot(collection(db, 'users'), (snap) => {
+    // Students listener filtered by role so Firestore rules allow list for all mentors & admins
+    const studentsQuery = query(collection(db, 'users'), where('role', '==', 'Student'));
+    const unsubStudents = onSnapshot(studentsQuery, (snap) => {
       clearTimeout(loadingTimeout);
-      const studentList = snap.docs
-        .map(d => ({ uid: d.id, ...d.data() } as UserProfile))
-        .filter(u => u.role === 'Student');
+      const studentList = snap.docs.map(d => ({ uid: d.id, ...d.data() } as UserProfile));
       setStudents(studentList);
       setLoading(false);
 
-      // Refresh selected student if updated
-      if (selectedStudent) {
-        const updated = studentList.find(s => s.uid === selectedStudent.uid);
-        if (updated) setSelectedStudent(updated);
-      }
+      setSelectedStudent(prev => {
+        if (!prev) return null;
+        return studentList.find(s => s.uid === prev.uid) || null;
+      });
     }, (err) => {
       clearTimeout(loadingTimeout);
-      console.error("Students Listener Error:", err);
+      console.error('Students Listener Error:', err);
+      showStatus('error', 'Unable to load student roster. Check your mentor permissions.');
       setLoading(false);
     });
 
     // Materials listener
     const unsubMaterials = onSnapshot(collection(db, 'materials'), (snap) => {
       const materialList = snap.docs.map(d => ({ id: d.id, ...d.data() } as Material));
-      const isAdmin = user?.email === 'meernot1@gmail.com';
-      if (isAdmin) {
-        setMaterials(materialList);
-      } else {
-        setMaterials(materialList.filter(m => m.mentorId === user?.uid));
-      }
+      setMaterials(isAdmin ? materialList : materialList.filter(m => m.mentorId === user.uid));
     }, (err) => {
-      console.error("Materials Listener Error:", err);
+      console.error('Materials Listener Error:', err);
+      showStatus('error', 'Unable to sync materials catalog.');
     });
 
     // Courses listener
     const unsubCourses = onSnapshot(collection(db, 'courses'), (snap) => {
       const courseList = snap.docs.map(d => ({ id: d.id, ...d.data() } as Course));
-      const isAdmin = user?.email === 'meernot1@gmail.com';
-      if (isAdmin) {
-        setCourses(courseList);
-      } else {
-        setCourses(courseList.filter(c => c.mentorId === user?.uid));
-      }
+      setCourses(isAdmin ? courseList : courseList.filter(c => c.mentorId === user.uid));
     }, (err) => {
-      console.error("Courses Listener Error:", err);
+      console.error('Courses Listener Error:', err);
+      showStatus('error', 'Unable to sync courses catalog.');
     });
 
     return () => {
+      clearTimeout(loadingTimeout);
       unsubStudents();
       unsubMaterials();
       unsubCourses();
     };
-  }, [user]);
+  }, [user, isAdmin]);
 
   useEffect(() => {
-    if (!selectedStudent) {
+    if (!selectedStudent || !isAdmin) {
       setStudentProgress([]);
+      setProgressLoading(false);
       return;
     }
 
@@ -132,49 +176,56 @@ function MentorDashboard() {
       setStudentProgress(snap.docs.map(d => ({ id: d.id, ...d.data() } as Progress)));
       setProgressLoading(false);
     }, (err) => {
-      console.error("Progress Listener Error:", err);
+      console.error('Progress Listener Error:', err);
       setProgressLoading(false);
     });
 
     return () => unsub();
-  }, [selectedStudent?.uid]);
+  }, [selectedStudent?.uid, isAdmin]);
 
   const awardBadge = async (studentId: string, badgeType: string) => {
-    console.log(`Awarding badge "${badgeType}" to student ${studentId}`);
+    const cleanBadge = badgeType.trim();
+    if (!cleanBadge) {
+      showStatus('error', 'Enter a badge title before awarding.');
+      return;
+    }
+    setAwardingBadge(true);
     try {
-      await dbService.awardBadge(studentId, badgeType);
-      alert(`Access Granted: Badge "${badgeType}" archived to student profile.`);
+      await dbService.awardBadge(studentId, cleanBadge);
+      setBadgeInput('');
+      showStatus('success', `Badge "${cleanBadge}" archived to student profile.`);
     } catch (err: any) {
-      console.error("Badge Error Details:", err);
-      alert(`Failed to award badge: ${err.message || 'Check mentor permissions.'}`);
+      showStatus('error', err?.message || 'Failed to award badge. Check mentor permissions.');
+    } finally {
+      setAwardingBadge(false);
     }
   };
 
-  const handleGiveBadge = async (studentId: string) => {
-    const badge = prompt('Enter specialized badge name:');
-    if (badge) {
-      awardBadge(studentId, badge);
+  const handlePromoteToMentor = async (student: UserProfile) => {
+    if (!isAdmin) return;
+    setPromotingUid(student.uid);
+    try {
+      await dbService.updateUserProfile(student.uid, { role: 'Mentor' });
+      setSelectedStudent(null);
+      showStatus('success', `${student.displayName} promoted to Mentor.`);
+    } catch (err: any) {
+      showStatus('error', err?.message || 'Failed to promote user.');
+    } finally {
+      setPromotingUid(null);
     }
   };
 
   const handleDeleteMaterial = async (id: string) => {
-    console.log(`[ACTION] Delete Material initiated: ${id}`);
-    
-    // Skip confirm for the specific user who asked for "reset by yourself"
-    // or just make it silent if they are clicking multiple times
     try {
       await dbService.deleteMaterial(id);
-      console.log(`[SUCCESS] Material ${id} deleted.`);
-      // We don't necessarily need an alert if it's high frequency, 
-      // but let's keep it for feedback for now.
+      showStatus('success', 'Material removed from catalog.');
     } catch (err: any) {
-      console.error("[ERROR] Delete Material:", err);
-      let msg = err.message;
+      let msg = err?.message || 'Deletion failed.';
       try {
         const errorData = JSON.parse(err.message);
-        msg = `Err: ${errorData.error} (Op: ${errorData.operationType})`;
-      } catch (e) {}
-      alert(`Deletion Failed: ${msg}`);
+        msg = `${errorData.error} (${errorData.operationType})`;
+      } catch {}
+      showStatus('error', `Deletion failed: ${msg}`);
     }
   };
 
@@ -184,20 +235,31 @@ function MentorDashboard() {
 
   const confirmDeleteCourse = async () => {
     if (!courseToDelete) return;
-    console.log(`[ACTION] Delete Course: ${courseToDelete.id}`);
     try {
       await dbService.deleteCourse(courseToDelete.id);
-      alert("Curriculum removed from system.");
+      showStatus('success', `Course "${courseToDelete.title}" removed from system.`);
       setCourseToDelete(null);
     } catch (err: any) {
-      console.error("Delete Course Error:", err);
-      let msg = err.message;
+      let msg = err?.message || 'Course deletion failed.';
       try {
         const errorData = JSON.parse(err.message);
-        msg = `Error: ${errorData.error} (Operation: ${errorData.operationType} on ${errorData.path})`;
-      } catch (e) {}
-      alert(`Course Deletion Failed: ${msg}`);
+        msg = `${errorData.error} (${errorData.operationType} on ${errorData.path})`;
+      } catch {}
+      showStatus('error', `Course deletion failed: ${msg}`);
       setCourseToDelete(null);
+    }
+  };
+
+  const handleConfirmPurge = async () => {
+    setPurging(true);
+    try {
+      await dbService.purgeAllData();
+      setConfirmPurge(false);
+      showStatus('success', 'Curriculum reset complete.');
+    } catch (err: any) {
+      showStatus('error', err?.message || 'Purge failed.');
+    } finally {
+      setPurging(false);
     }
   };
 
@@ -205,12 +267,36 @@ function MentorDashboard() {
     try {
       await dbService.toggleMaterialPriority(id, current);
     } catch (err: any) {
-      console.error("Toggle Priority Error:", err);
+      showStatus('error', err?.message || 'Failed to toggle priority.');
     }
   };
 
   return (
     <div className="space-y-8 pb-12">
+      <AnimatePresence>
+        {statusBanner && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className={cn(
+              "p-4 rounded-2xl border flex items-center justify-between gap-4 text-xs font-bold",
+              statusBanner.type === 'success'
+                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-500"
+                : "bg-red-500/10 border-red-500/30 text-red-500"
+            )}
+          >
+            <div className="flex items-center gap-3">
+              {statusBanner.type === 'success' ? <CheckCircle size={16} /> : <AlertCircle size={16} />}
+              <span>{statusBanner.message}</span>
+            </div>
+            <button onClick={() => setStatusBanner(null)} className="p-1 hover:opacity-70">
+              <CloseIcon size={14} />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <header className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-8">
         <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }}>
           <h1 className="text-3xl md:text-4xl font-black italic mb-1 tracking-tighter uppercase text-primary">Mentor Command</h1>
@@ -269,7 +355,9 @@ function MentorDashboard() {
                         </div>
                         <div>
                           <p className="font-black uppercase italic tracking-tight">{student.displayName}</p>
-                          <p className="text-[9px] font-black uppercase text-muted-foreground tracking-widest opacity-40">{student.email}</p>
+                          <p className="text-[9px] font-black uppercase text-muted-foreground tracking-widest opacity-50">
+                            @{student.username} • {student.points || 0} pts
+                          </p>
                         </div>
                       </div>
                       <div className="flex items-center gap-3">
@@ -293,7 +381,7 @@ function MentorDashboard() {
                 exit={{ opacity: 0, height: 0 }}
                 className="bg-card border-2 md:border-4 border-border rounded-3xl sm:rounded-[3.5rem] md:rounded-[4rem] p-5 sm:p-10 shadow-2xl relative overflow-hidden mt-8"
               >
-                <div className="flex items-center justify-between mb-10">
+                <div className="flex items-center justify-between mb-8">
                   <h3 className="text-2xl font-black italic uppercase tracking-tighter flex items-center gap-4">
                     <Users className="text-primary" size={28} />
                     Student Intel
@@ -307,11 +395,52 @@ function MentorDashboard() {
                 </div>
 
                 <div className="space-y-8">
+                  <div className="p-5 bg-muted/20 border border-border rounded-2xl space-y-4">
+                    <h4 className="text-[10px] font-black uppercase tracking-[0.3em] text-muted-foreground flex items-center gap-2">
+                      <Award size={14} className="text-primary" /> Award Specialized Badge
+                    </h4>
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <input
+                        type="text"
+                        value={badgeInput}
+                        onChange={(e) => setBadgeInput(e.target.value)}
+                        maxLength={80}
+                        placeholder="e.g. Lab Distinction"
+                        className="flex-1 bg-background border border-border rounded-xl px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-primary/20"
+                      />
+                      <button
+                        type="button"
+                        disabled={awardingBadge || !badgeInput.trim()}
+                        onClick={() => awardBadge(selectedStudent.uid, badgeInput)}
+                        className="px-5 py-2.5 bg-primary text-primary-foreground rounded-xl font-bold text-xs uppercase tracking-widest disabled:opacity-50"
+                      >
+                        {awardingBadge ? 'Saving...' : 'Award'}
+                      </button>
+                    </div>
+                    {isAdmin && (
+                      <div className="pt-2 border-t border-border/50 flex items-center justify-between gap-4">
+                        <span className="text-xs text-muted-foreground">Admin Role Control</span>
+                        <button
+                          type="button"
+                          disabled={promotingUid === selectedStudent.uid}
+                          onClick={() => handlePromoteToMentor(selectedStudent)}
+                          className="px-4 py-2 bg-emerald-500/10 text-emerald-500 border border-emerald-500/30 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-500 hover:text-white transition-all disabled:opacity-50"
+                        >
+                          {promotingUid === selectedStudent.uid ? 'Promoting...' : 'Promote to Mentor'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
                   <div>
                     <h4 className="text-[10px] font-black uppercase tracking-[0.3em] text-muted-foreground/60 mb-6 flex items-center gap-2">
                        <Play size={14} /> Mission Progress
                     </h4>
-                    {progressLoading ? (
+                    {!isAdmin ? (
+                       <p className="text-center py-6 w-full text-muted-foreground text-[10px] font-black uppercase italic tracking-widest opacity-50">
+                         Detailed per-student logs are restricted to administrators.
+                       </p>
+                    ) : progressLoading ? (
                        <div className="text-center py-10 animate-pulse text-[10px] font-black uppercase tracking-widest opacity-30">Decrypting progress stream...</div>
                     ) : studentProgress.length === 0 ? (
                        <p className="text-center py-6 w-full text-muted-foreground text-[10px] font-black uppercase italic tracking-widest opacity-30">No missions logged in this sector.</p>
@@ -435,20 +564,11 @@ function MentorDashboard() {
               )}
             </div>
             
-            {user?.email === 'meernot1@gmail.com' && (
+            {isAdmin && (
                <div className="mt-20 pt-16 border-t-4 border-border/30">
                   <button 
-                    onClick={async () => {
-                      if (confirm('SYSTEM OVERRIDE: Purge all curriculum data?')) {
-                        try {
-                           await dbService.purgeAllData();
-                           alert('System Reset Complete.');
-                        } catch (e: any) {
-                           alert('Purge Failed: ' + e.message);
-                        }
-                      }
-                    }}
-                    className="w-full py-6 bg-red-500/5 border-4 border-red-500/20 text-red-500 rounded-[3rem] font-black text-xs uppercase tracking-[0.5em] hover:bg-red-500 text-white transition-all shadow-xl"
+                    onClick={() => setConfirmPurge(true)}
+                    className="w-full py-6 bg-red-500/5 border-4 border-red-500/20 text-red-500 rounded-[3rem] font-black text-xs uppercase tracking-[0.5em] hover:bg-red-500 hover:text-white transition-all shadow-xl"
                   >
                     Emergency Core Purge
                   </button>
@@ -458,7 +578,53 @@ function MentorDashboard() {
         </section>
       </div>
 
-      {showUpload && <UploadModal onClose={() => setShowUpload(false)} />}
+      {showUpload && (
+        <UploadModal
+          onClose={() => setShowUpload(false)}
+          onSuccess={(msg) => showStatus('success', msg)}
+        />
+      )}
+
+      <AnimatePresence>
+        {confirmPurge && (
+          <div className="fixed inset-0 z-[300] flex items-center justify-center bg-background/80 backdrop-blur-md p-6">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="max-w-md w-full bg-card border border-border p-8 rounded-[2.5rem] shadow-2xl relative"
+            >
+              <div className="flex flex-col items-center text-center space-y-6">
+                <div className="w-16 h-16 rounded-2xl bg-red-500/10 text-red-500 flex items-center justify-center">
+                  <AlertCircle size={32} />
+                </div>
+                <div>
+                  <h2 className="text-2xl font-bold mb-2">Purge Curriculum Data?</h2>
+                  <p className="text-muted-foreground text-sm leading-relaxed">
+                    This will permanently delete all materials and courses across the platform.
+                  </p>
+                </div>
+                <div className="flex w-full gap-3">
+                  <button
+                    onClick={() => setConfirmPurge(false)}
+                    disabled={purging}
+                    className="flex-1 py-4 bg-muted border border-border rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-border transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleConfirmPurge}
+                    disabled={purging}
+                    className="flex-1 py-4 bg-red-500 text-white rounded-xl font-bold text-xs uppercase tracking-widest shadow-lg shadow-red-500/20 hover:bg-red-600 transition-all disabled:opacity-50"
+                  >
+                    {purging ? 'Purging...' : 'Confirm Purge'}
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {courseToDelete && (
@@ -507,560 +673,248 @@ function MentorDashboard() {
   );
 }
 
-function StudentDashboard() {
-  const { profile, user } = useAuth();
-  const navigate = useNavigate();
-  const [progress, setProgress] = useState<Progress[]>([]);
-  const [recentMaterials, setRecentMaterials] = useState<Material[]>([]);
-  const [leaderboard, setLeaderboard] = useState<UserProfile[]>([]);
-  const [selectedMaterial, setSelectedMaterial] = useState<Material | null>(null);
-  const [showReminders, setShowReminders] = useState(false);
-  const [activeNotification, setActiveNotification] = useState<StudyReminder | null>(null);
-
-  const [materialsLoading, setMaterialsLoading] = useState(true);
-  const [leaderboardLoading, setLeaderboardLoading] = useState(true);
-
-  useEffect(() => {
-    if (!user) return;
-
-    setMaterialsLoading(true);
-    setLeaderboardLoading(true);
-
-    // Leaderboard fetch
-    dbService.getLeaderboard().then(data => {
-      setLeaderboard(data);
-      setLeaderboardLoading(false);
-    });
-
-    // Progress listener
-    const unsubProgress = onSnapshot(
-      query(collection(db, 'progress'), where('userId', '==', user.uid)),
-      (snap) => {
-        setProgress(snap.docs.map(d => ({ id: d.id, ...d.data() } as Progress)));
-      },
-      (err) => {
-        console.error("Progress Listener Error:", err);
-      }
-    );
-
-    // Materials listener
-    const unsubMaterials = onSnapshot(collection(db, 'materials'), (snap) => {
-      setRecentMaterials(snap.docs.map(d => ({ id: d.id, ...d.data() } as Material)));
-      setMaterialsLoading(false);
-    }, (err) => {
-      console.error("Student Materials Listener Error:", err);
-      setMaterialsLoading(false);
-    });
-
-    return () => {
-      unsubProgress();
-      unsubMaterials();
-    };
-  }, [user]);
-
-  // Reminder Notification Logic
-  useEffect(() => {
-    if (!user) return;
-
-    const q = query(
-      collection(db, 'reminders'),
-      where('userId', '==', user.uid),
-      where('isNotified', '==', false)
-    );
-
-    const unsubReminders = onSnapshot(q, (snap) => {
-      const now = new Date();
-      snap.docs.forEach(doc => {
-        const r = { id: doc.id, ...doc.data() } as StudyReminder;
-        const time = new Date(r.time.seconds ? r.time.seconds * 1000 : r.time);
-        
-        // If it's time or past time
-        if (now >= time) {
-          setActiveNotification(r);
-          dbService.markReminderNotified(r.id);
-        }
-      });
-    }, (err) => {
-      console.error("Reminders Listener Error:", err);
-    });
-
-    // Check periodically for time match (if already loaded but time hasn't passed yet)
-    const interval = setInterval(() => {
-      loadAndCheckReminders();
-    }, 30000); // Check every 30 seconds
-
-    async function loadAndCheckReminders() {
-      const reminders = await dbService.getReminders(user.uid);
-      const now = new Date();
-      reminders.forEach(r => {
-        if (r.isNotified) return;
-        const time = new Date(r.time.seconds ? r.time.seconds * 1000 : r.time);
-        if (now >= time) {
-          setActiveNotification(r);
-          dbService.markReminderNotified(r.id);
-        }
-      });
-    }
-
-    return () => {
-      unsubReminders();
-      clearInterval(interval);
-    };
-  }, [user]);
-
-  const prioritized = recentMaterials.filter(m => m.isPrioritized);
-  const others = recentMaterials.filter(m => !m.isPrioritized).slice(0, 4);
-
-  return (
-    <div className="space-y-8 pb-12">
-      <header className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-8">
-        <div className="flex-1">
-          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
-            <div className="flex items-center gap-3 mb-3">
-              <h1 className="text-3xl md:text-4xl font-black tracking-tighter uppercase italic text-foreground leading-none">Welcome, {profile?.displayName}</h1>
-            </div>
-            <p className="text-muted-foreground italic flex items-center gap-2 mb-4 font-bold uppercase text-[9px] tracking-[0.3em] opacity-60">
-              Status: <span className="text-emerald-500">Active Node</span>
-            </p>
-          </motion.div>
-        </div>
-        <div className="flex items-center gap-6">
-          <motion.button 
-            whileHover={{ scale: 1.1 }}
-            whileTap={{ scale: 0.9 }}
-            onClick={() => setShowReminders(true)}
-            className="relative w-14 h-14 rounded-full bg-card border-4 border-border flex items-center justify-center text-primary shadow-2xl transition-all hover:border-primary group"
-          >
-            <Bell size={24} strokeWidth={3} className="group-hover:rotate-12 transition-transform" />
-          </motion.button>
-        </div>
-      </header>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
-        {/* Main Intelligence Feed */}
-        <div className="space-y-12">
-          {prioritized.length > 0 || materialsLoading ? (
-            <section className="space-y-8">
-               <h2 className="text-2xl font-black italic uppercase tracking-tighter flex items-center gap-4 text-yellow-500">
-                  <Star size={32} fill="currentColor" />
-                  Priority Uplinks
-               </h2>
-               <div className="grid grid-cols-1 gap-6">
-                  {materialsLoading ? (
-                    [1,2].map(i => <div key={i} className="h-32 bg-muted animate-pulse rounded-[3rem]" />)
-                  ) : (
-                    prioritized.map(m => (
-                      <MaterialCard 
-                        key={m.id} 
-                        material={m} 
-                        priority 
-                        onClick={() => setSelectedMaterial(m)} 
-                      />
-                    ))
-                  )}
-               </div>
-            </section>
-          ) : null}
-
-          {/* Recent Materials */}
-          <section className="space-y-8">
-             <div className="flex items-center justify-between">
-                <h2 className="text-2xl font-black italic uppercase tracking-tighter flex items-center gap-4">
-                   <Clock className="text-primary font-black" size={24} strokeWidth={3} />
-                   Sector Catalog
-                </h2>
-             </div>
-             <div className="grid grid-cols-1 gap-6">
-                {others.length === 0 && prioritized.length === 0 ? (
-                  <div className="py-24 text-center bg-muted/5 border-2 md:border-4 border-dashed border-border/20 rounded-3xl sm:rounded-[4rem]">
-                     <p className="text-xs font-black italic uppercase text-muted-foreground tracking-[0.4em] opacity-30">Waiting for mentor transmission...</p>
-                  </div>
-                ) : (
-                  others.map(m => (
-                    <MaterialCard 
-                      key={m.id} 
-                      material={m} 
-                      onClick={() => setSelectedMaterial(m)} 
-                    />
-                  ))
-                )}
-             </div>
-          </section>
-        </div>
-
-        {/* Global Analytics */}
-        <div className="space-y-12">
-          <div className="bg-card border-2 md:border-4 border-border rounded-3xl sm:rounded-[3.5rem] md:rounded-[4rem] p-5 sm:p-12 shadow-2xl">
-             <h2 className="text-3xl font-black italic uppercase tracking-tighter mb-10 flex items-center gap-4">
-               <TrendingUp size={32} className="text-emerald-500" strokeWidth={3} />
-               Sector Efficiency
-             </h2>
-             <div className="space-y-10">
-                <ProgressItem label="Video Modules" current={progress.filter(p => true).length} total={20} color="bg-blue-500" />
-                <ProgressItem label="Laboratory Tests" current={0} total={10} color="bg-purple-500" />
-                <ProgressItem label="Theory Checks" current={0} total={15} color="bg-amber-500" />
-             </div>
-          </div>
-        </div>
-      </div>
-
-      <AnimatePresence>
-        {selectedMaterial && (
-          <MaterialViewer 
-            material={selectedMaterial} 
-            onClose={() => setSelectedMaterial(null)} 
-            onComplete={() => {
-               if (user) dbService.markComplete(user.uid, selectedMaterial.id);
-            }}
-          />
-        )}
-      </AnimatePresence>
-
-      <AnimatePresence>
-        {showReminders && (
-          <div className="fixed inset-0 z-[400] flex items-center justify-center bg-background/80 backdrop-blur-md p-6">
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.9, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="max-w-2xl w-full max-h-[80vh] overflow-y-auto bg-card border-2 md:border-4 border-border p-5 sm:p-8 rounded-3xl sm:rounded-[4rem] shadow-2xl relative custom-scrollbar"
-            >
-              <button 
-                onClick={() => setShowReminders(false)}
-                className="absolute top-8 right-8 p-3 rounded-full hover:bg-muted transition-colors"
-              >
-                <CloseIcon size={24} />
-              </button>
-              <StudyReminders />
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      <AnimatePresence>
-        {activeNotification && (
-          <div className="fixed bottom-10 right-10 z-[500] max-w-sm w-full">
-            <motion.div 
-              initial={{ opacity: 0, x: 100, scale: 0.8 }}
-              animate={{ opacity: 1, x: 0, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.8 }}
-              className="p-8 bg-primary text-primary-foreground rounded-[3rem] shadow-[0_40px_80px_-20px_rgba(0,0,0,0.3)] relative overflow-hidden group"
-            >
-              <div className="absolute top-0 right-0 p-4 opacity-10 rotate-12 group-hover:rotate-45 transition-transform">
-                <Bell size={80} />
-              </div>
-              <div className="relative z-10">
-                <div className="flex items-center gap-4 mb-4">
-                  <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center backdrop-blur-sm">
-                    <Clock size={24} strokeWidth={3} />
-                  </div>
-                  <div>
-                    <h4 className="text-xl font-black italic uppercase tracking-tighter">Study Pulse Active</h4>
-                    <p className="text-[10px] font-black uppercase tracking-widest opacity-60">Mission Directive</p>
-                  </div>
-                </div>
-                <p className="text-xl font-black italic uppercase mb-6 leading-tight">
-                  Sector: {activeNotification.subject}<br/>
-                  Topic: {activeNotification.topic}
-                </p>
-                <button 
-                  onClick={() => setActiveNotification(null)}
-                  className="w-full py-3 bg-white text-primary rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-opacity-90 transition-all active:scale-95"
-                >
-                  Acknowledge Directive
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
-
-function MaterialCard({ material, onClick, priority }: { material: Material, onClick: () => void, priority?: boolean }) {
-  return (
-    <motion.div 
-      whileHover={{ y: -4, scale: 1.01 }}
-      whileTap={{ scale: 0.98 }}
-      onClick={onClick}
-      className={cn(
-        "p-6 bg-card border rounded-[2rem] flex items-center justify-between cursor-pointer group shadow-sm hover:shadow-xl transition-all",
-        priority ? "border-yellow-500/30 bg-yellow-500/5 ring-1 ring-yellow-500/10" : "border-border"
-      )}
-    >
-      <div className="flex items-center gap-4">
-         <div className={cn(
-           "w-14 h-14 rounded-2xl flex items-center justify-center shadow-inner transition-colors",
-           material.type === 'video' ? 'bg-blue-500/10 text-blue-500' : 'bg-red-500/10 text-red-500',
-           priority && "bg-white shadow-sm"
-         )}>
-            {material.type === 'video' ? <Video size={24} /> : (material.type === 'pdf' ? <Download size={24} /> : <BookIcon size={24} />)}
-         </div>
-         <div>
-            <div className="flex items-center gap-2">
-               <h4 className="font-bold text-sm group-hover:text-primary transition-colors max-w-[120px] truncate">{material.title}</h4>
-               {priority && <Star size={12} fill="#eab308" className="text-yellow-500" />}
-            </div>
-            <p className="text-[10px] font-black uppercase text-muted-foreground tracking-widest leading-tight">{material.subject}</p>
-         </div>
-      </div>
-      <div className="flex items-center gap-2">
-        <a 
-          href={material.url}
-          download
-          onClick={e => e.stopPropagation()}
-          className="w-8 h-8 rounded-full bg-muted/50 flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary transition-all active:scale-95"
-          title="Download"
-        >
-          <Download size={14} />
-        </a>
-        <div className="w-8 h-8 rounded-full bg-muted/50 flex items-center justify-center text-muted-foreground group-hover:bg-primary group-hover:text-white transition-all">
-           <Play size={14} />
-        </div>
-      </div>
-    </motion.div>
-  );
-}
-
-function MaterialViewer({ material, onClose, onComplete }: { material: Material, onClose: () => void, onComplete: () => void }) {
+export function MaterialViewer({
+  material,
+  onClose,
+  onComplete,
+  isCompleted = false,
+}: {
+  material: Material;
+  onClose: () => void;
+  onComplete: () => void;
+  isCompleted?: boolean;
+}) {
   const [loadError, setLoadError] = useState(false);
-  const [completed, setCompleted] = useState(false);
-  const isVideo = material.url.match(/\.(mp4|webm|ogg)$/i) || material.url.includes('youtube.com') || material.url.includes('youtu.be');
-  const isPdf = material.url.match(/\.pdf$/i) || material.url.includes('?alt=media');
+  const [completed, setCompleted] = useState(isCompleted);
+  const safeUrl = getSafeHttpUrl(material.url);
+  const youtubeEmbedUrl = safeUrl ? getYouTubeEmbedUrl(safeUrl) : null;
+  const isDirectVideo = Boolean(
+    safeUrl && (safeUrl.match(/\.(mp4|webm|ogg)(\?|$)/i) || (material.type === 'video' && !youtubeEmbedUrl))
+  );
+  const isFirebaseMedia = Boolean(
+    safeUrl && (safeUrl.match(/\.pdf(\?|$)/i) || safeUrl.includes('?alt=media'))
+  );
 
   return (
-    <motion.div 
+    <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="fixed inset-0 z-[200] bg-background/95 backdrop-blur-2xl p-4 md:p-8 flex items-center justify-center"
+      className="fixed inset-0 z-[200] bg-background/95 backdrop-blur-2xl p-2 sm:p-4 md:p-8 flex items-center justify-center"
     >
-       <button 
-         onClick={onClose}
-         className="absolute top-6 right-6 p-4 rounded-full bg-muted/50 hover:bg-muted text-muted-foreground hover:text-foreground transition-all z-[210] hover:rotate-90"
-       >
-         <CloseIcon size={24} />
-       </button>
-       
-       <div className="w-full max-w-6xl h-full flex flex-col bg-card border border-border rounded-[3rem] shadow-2xl overflow-hidden">
-          <div className="p-8 border-b border-border flex items-center justify-between bg-muted/20">
-             <div className="flex items-center gap-6">
-                <div className="w-16 h-16 rounded-[1.5rem] bg-primary/10 text-primary flex items-center justify-center shadow-inner">
-                   {material.type === 'video' ? <Video size={28} /> : <BookIcon size={28} />}
-                </div>
-                <div>
-                   <h2 className="text-2xl font-bold tracking-tight">{material.title}</h2>
-                   <p className="text-[10px] text-muted-foreground uppercase font-black tracking-[0.2em] mt-1">{material.subject} • {material.type}</p>
-                </div>
-             </div>
-             <div className="flex items-center gap-3">
-                <a 
-                   href={material.url}
-                   download
-                   className="px-6 py-4 bg-muted border border-border text-muted-foreground rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-border transition-all flex items-center gap-2"
-                >
-                  <Download size={16} />
-                  Download
-                </a>
-                <a 
-                  href={material.url} 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                  className="px-8 py-4 bg-primary text-primary-foreground rounded-2xl font-black text-[10px] uppercase tracking-widest hover:shadow-lg shadow-primary/20 transition-all flex items-center gap-2"
-                >
-                  <ExternalLink size={16} />
-                  Open Source
-                </a>
-             </div>
-          </div>
+      <button
+        type="button"
+        onClick={onClose}
+        aria-label="Close material viewer"
+        className="absolute top-4 right-4 sm:top-6 sm:right-6 p-2.5 sm:p-3 rounded-full bg-muted/80 hover:bg-muted text-muted-foreground hover:text-foreground transition-colors z-[210]"
+      >
+        <CloseIcon size={20} />
+      </button>
 
-          <div className="flex-1 bg-black/20 flex flex-col items-center justify-center relative group overflow-hidden">
-             {loadError ? (
-               <div className="text-center p-12 max-w-md bg-card border border-border rounded-[2.5rem] shadow-xl">
-                  <div className="w-16 h-16 rounded-full bg-red-500/10 text-red-500 flex items-center justify-center mx-auto mb-6">
-                    <AlertCircle size={32} />
-                  </div>
-                  <h4 className="text-xl font-bold mb-2">Display Restricted</h4>
-                  <p className="text-sm text-muted-foreground mb-8 leading-relaxed">
-                    Firebase Storage permissions (412) or browser safety settings are preventing direct embedding. Please open the file in a new tab for full access.
-                  </p>
-                  <a 
-                    href={material.url} 
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    className="block w-full py-4 bg-primary text-primary-foreground rounded-2xl font-black text-xs uppercase tracking-widest text-center"
-                  >
-                    Open in New Tab
-                  </a>
-               </div>
-             ) : (
-               <>
-                 {isVideo ? (
-                   <video 
-                     controls 
-                     className="w-full h-full max-h-[70vh] rounded-2xl shadow-2xl"
-                     onError={() => setLoadError(true)}
-                   >
-                     <source src={material.url} />
-                     Your browser does not support the video tag.
-                   </video>
-                 ) : (
-                   <iframe 
-                     src={material.url.includes('?alt=media') ? material.url : `https://docs.google.com/viewer?url=${encodeURIComponent(material.url)}&embedded=true`} 
-                     className="w-full h-full border-none bg-white rounded-2xl shadow-inner"
-                     onError={() => setLoadError(true)}
-                     onLoad={(e) => {
-                       // Simple check if iframe failed to load meaningful content
-                       try {
-                         const target = e.target as HTMLIFrameElement;
-                         if (target.src === 'about:blank') setLoadError(true);
-                       } catch (e) {}
-                     }}
-                   />
-                 )}
-               </>
-             )}
+      <div className="w-full max-w-6xl h-[90vh] sm:h-full flex flex-col bg-card border border-border rounded-2xl shadow-2xl overflow-hidden mt-8 sm:mt-0">
+        <div className="p-4 sm:p-6 border-b border-border flex flex-col md:flex-row md:items-center justify-between gap-4 bg-muted/20">
+          <div className="flex items-center gap-4 min-w-0">
+            <div className="w-12 h-12 rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0">
+              {material.type === 'video' ? <Video size={22} /> : <BookIcon size={22} />}
+            </div>
+            <div className="min-w-0">
+              <h2 className="text-lg sm:text-xl font-bold tracking-tight text-foreground truncate">
+                {material.title}
+              </h2>
+              <p className="text-xs text-muted-foreground capitalize mt-0.5">
+                {material.subject} · {material.type}
+              </p>
+            </div>
           </div>
-
-          <div className="p-8 border-t border-border flex items-center justify-between bg-muted/20">
-             <div className="flex items-center gap-8">
-                <div className="flex flex-col">
-                   <span className="text-[10px] font-black uppercase text-muted-foreground tracking-widest mb-1">Mentor</span>
-                   <span className="text-sm font-bold">Faculty Verified</span>
-                </div>
-                <div className="w-px h-8 bg-border" />
-                <div className="flex flex-col">
-                   <span className="text-[10px] font-black uppercase text-muted-foreground tracking-widest mb-1">Status</span>
-                   <span className="text-sm font-bold text-emerald-500 flex items-center gap-1.5">
-                      <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                      Active Record
-                   </span>
-                </div>
-             </div>
-             <button 
-               onClick={() => {
-                 setCompleted(true);
-                 setTimeout(() => {
-                   onComplete();
-                   onClose();
-                 }, 1500);
-               }}
-               disabled={completed}
-               className={cn(
-                 "px-10 py-5 rounded-[1.5rem] font-black text-xs uppercase tracking-widest transition-all hover:shadow-xl active:scale-95 flex items-center gap-2",
-                 completed ? "bg-emerald-500/20 text-emerald-500 scale-95" : "bg-emerald-500 text-white shadow-emerald-500/20 hover:bg-emerald-600"
-               )}
-             >
-               {completed ? (
-                 <>
-                   <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }}>
-                     <ShieldCheck size={20} />
-                   </motion.div>
-                   Progress Recorded
-                 </>
-               ) : 'Confirm Module Completion'}
-             </button>
-          </div>
-          
-          <AnimatePresence>
-            {completed && (
-              <motion.div 
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                className="absolute inset-0 z-[250] flex items-center justify-center bg-emerald-500/10 backdrop-blur-sm pointer-events-none"
+          {safeUrl && (
+            <div className="flex items-center gap-2 sm:gap-3 w-full md:w-auto shrink-0">
+              <a
+                href={safeUrl}
+                download
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex-1 md:flex-none justify-center px-4 py-2.5 bg-muted border border-border text-foreground rounded-xl text-xs font-medium hover:bg-muted/80 transition-colors flex items-center gap-2 whitespace-nowrap"
               >
-                 <motion.div 
-                   initial={{ scale: 0.5 }}
-                   animate={{ scale: [0.5, 1.2, 1] }}
-                   className="bg-card border-2 md:border-4 border-emerald-500 p-6 sm:p-12 rounded-3xl sm:rounded-[4rem] shadow-2xl flex flex-col items-center space-y-4"
-                 >
-                    <div className="w-24 h-24 rounded-full bg-emerald-500 text-white flex items-center justify-center shadow-lg shadow-emerald-500/30">
-                       <Award size={48} />
-                    </div>
-                    <div className="text-center">
-                       <h3 className="text-3xl font-black italic tracking-tighter">Unit Mastery!</h3>
-                       <p className="text-sm font-bold text-emerald-600 uppercase tracking-widest mt-1">Data node archived to profile</p>
-                    </div>
-                 </motion.div>
-              </motion.div>
+                <Download size={14} />
+                Download
+              </a>
+              <a
+                href={safeUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex-1 md:flex-none justify-center px-4 py-2.5 bg-primary text-primary-foreground rounded-xl text-xs font-semibold hover:opacity-90 transition-opacity flex items-center gap-2 whitespace-nowrap"
+              >
+                <ExternalLink size={14} />
+                Open Source
+              </a>
+            </div>
+          )}
+        </div>
+
+        <div className="flex-1 bg-black/20 flex flex-col items-center justify-center relative group overflow-hidden p-4">
+          {loadError || !safeUrl ? (
+            <div className="text-center p-6 sm:p-10 max-w-md bg-card border border-border rounded-2xl shadow-xl">
+              <div className="w-14 h-14 rounded-full bg-red-500/10 text-red-500 flex items-center justify-center mx-auto mb-5">
+                <AlertCircle size={28} />
+              </div>
+              <h4 className="text-lg font-bold text-foreground mb-2">Display Restricted</h4>
+              <p className="text-sm text-muted-foreground mb-6 leading-relaxed">
+                {safeUrl
+                  ? 'Browser safety settings are preventing direct embedding. Open the resource in a new tab for full access.'
+                  : 'This material has an invalid or unsupported URL format.'}
+              </p>
+              {safeUrl && (
+                <a
+                  href={safeUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block w-full py-3 bg-primary text-primary-foreground rounded-xl font-semibold text-xs text-center"
+                >
+                  Open in New Tab
+                </a>
+              )}
+            </div>
+          ) : youtubeEmbedUrl ? (
+            <iframe
+              src={youtubeEmbedUrl}
+              title={material.title}
+              className="w-full h-full max-h-[70vh] aspect-video border-none bg-black rounded-xl shadow-2xl"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              allowFullScreen
+              onError={() => setLoadError(true)}
+            />
+          ) : isDirectVideo ? (
+            <video
+              controls
+              className="w-full h-full max-h-[70vh] rounded-xl shadow-2xl"
+              onError={() => setLoadError(true)}
+            >
+              <source src={safeUrl} />
+              Your browser does not support the video tag.
+            </video>
+          ) : (
+            <iframe
+              src={
+                isFirebaseMedia
+                  ? safeUrl
+                  : `https://docs.google.com/viewer?url=${encodeURIComponent(safeUrl)}&embedded=true`
+              }
+              title={material.title}
+              className="w-full h-full border-none bg-white rounded-xl shadow-inner"
+              onError={() => setLoadError(true)}
+              onLoad={(e) => {
+                try {
+                  const target = e.target as HTMLIFrameElement;
+                  if (target.src === 'about:blank') setLoadError(true);
+                } catch {}
+              }}
+            />
+          )}
+        </div>
+
+        <div className="p-4 sm:p-6 border-t border-border flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-muted/20">
+          <div className="flex items-center gap-6 justify-around sm:justify-start w-full sm:w-auto">
+            <div className="flex flex-col">
+              <span className="text-xs text-muted-foreground">Subject</span>
+              <span className="text-sm font-medium text-foreground capitalize">
+                {material.subject}
+              </span>
+            </div>
+            <div className="w-px h-8 bg-border" />
+            <div className="flex flex-col">
+              <span className="text-xs text-muted-foreground">Progress</span>
+              <span
+                className={cn(
+                  'text-sm font-medium flex items-center gap-1.5',
+                  completed ? 'text-emerald-600 dark:text-emerald-400' : 'text-foreground'
+                )}
+              >
+                {completed ? 'Completed' : 'In Progress'}
+              </span>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              if (completed) {
+                onClose();
+                return;
+              }
+              setCompleted(true);
+              setTimeout(() => {
+                onComplete();
+                onClose();
+              }, 1100);
+            }}
+            className={cn(
+              'w-full sm:w-auto justify-center px-6 py-3 rounded-xl font-semibold text-xs transition-colors flex items-center gap-2 whitespace-nowrap shrink-0',
+              completed
+                ? 'bg-emerald-600/15 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-600/20'
+                : 'bg-emerald-600 text-white hover:bg-emerald-700'
             )}
-          </AnimatePresence>
-       </div>
+          >
+            {completed ? (
+              <>
+                <ShieldCheck size={16} />
+                <span>Completed — Close</span>
+              </>
+            ) : (
+              'Mark Module Complete'
+            )}
+          </button>
+        </div>
+
+        <AnimatePresence>
+          {completed && !isCompleted && (
+            <motion.div
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 z-[250] flex items-center justify-center bg-emerald-500/10 backdrop-blur-sm pointer-events-none"
+            >
+              <motion.div
+                initial={{ scale: 0.9 }}
+                animate={{ scale: 1 }}
+                className="bg-card border border-emerald-500/40 p-8 rounded-2xl shadow-2xl flex flex-col items-center space-y-3"
+              >
+                <div className="w-16 h-16 rounded-full bg-emerald-600 text-white flex items-center justify-center shadow-lg">
+                  <Award size={32} />
+                </div>
+                <div className="text-center">
+                  <h3 className="text-xl font-bold text-foreground">Module Completed</h3>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Progress saved to your student profile
+                  </p>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
     </motion.div>
   );
 }
 
-function StatCard({ title, value, icon }: { title: string, value: string, icon: React.ReactNode }) {
+function StatCard({ title, value, icon }: { title: string; value: string; icon: React.ReactNode }) {
   return (
     <div className="bg-card border border-border rounded-2xl p-6 shadow-sm">
       <div className="flex items-center justify-between mb-4">
         <span className="text-sm font-medium text-muted-foreground">{title}</span>
         <div className="text-primary">{icon}</div>
       </div>
-      <div className="text-3xl font-bold">{value}</div>
+      <div className="text-3xl font-bold tabular-nums">{value}</div>
     </div>
   );
 }
 
-function AchievementBadge({ label }: { label: string }) {
-  return (
-    <div className="px-6 py-4 rounded-2xl bg-background border-2 border-primary/20 flex items-center gap-3 shadow-sm transform hover:scale-105 transition-transform cursor-default">
-      <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
-         <Award size={16} className="text-primary" />
-      </div>
-      <span className="font-bold text-sm">{label}</span>
-    </div>
-  );
-}
-
-function ProgressItem({ label, current, total, color }: { label: string, current: number, total: number, color: string }) {
-  const pct = Math.round((current / total) * 100);
-  return (
-    <div className="space-y-2">
-      <div className="flex justify-between text-sm font-medium">
-        <span>{label}</span>
-        <span className="text-muted-foreground">{pct}%</span>
-      </div>
-      <div className="h-2 w-full bg-muted rounded-full overflow-hidden">
-        <div className={cn("h-full transition-all duration-500", color)} style={{ width: `${pct}%` }} />
-      </div>
-    </div>
-  );
-}
-
-function CourseCard({ title, subject, type }: { title: string, subject: string, type: string }) {
-  return (
-    <div className="group bg-card border border-border rounded-2xl overflow-hidden hover:border-primary transition-all cursor-pointer shadow-sm hover:shadow-xl">
-      <div className="h-40 bg-muted flex items-center justify-center relative">
-         <div className="absolute top-3 right-3 px-3 py-1 rounded-full bg-background/80 backdrop-blur-md text-[10px] font-bold uppercase tracking-wider">
-           {subject}
-         </div>
-         {type === 'video' ? <Video className="w-12 h-12 opacity-20" /> : <BookIcon className="w-12 h-12 opacity-20" />}
-      </div>
-      <div className="p-6">
-        <h4 className="font-bold mb-4 group-hover:text-primary transition-colors">{title}</h4>
-        <div className="flex items-center justify-between text-xs text-muted-foreground font-medium uppercase tracking-widest">
-           <span className="flex items-center gap-1">
-             {type === 'video' ? <Video size={14} /> : <BookIcon size={14} />}
-             {type}
-           </span>
-           <span className="hover:text-primary transition-colors">Learn More</span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function UploadModal({ onClose }: { onClose: () => void }) {
-  const { profile } = useAuth();
+function UploadModal({ onClose, onSuccess }: { onClose: () => void; onSuccess?: (msg: string) => void }) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [type, setType] = useState<'video' | 'book' | 'pdf' | 'course'>('video');
   const [subject, setSubject] = useState<Subject>('physics');
   const [url, setUrl] = useState('');
   const [loading, setLoading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
@@ -1071,10 +925,10 @@ function UploadModal({ onClose }: { onClose: () => void }) {
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setUploadError(null);
 
-    // Validate size (limit to 50MB for demo/preview stability)
     if (file.size > 50 * 1024 * 1024) {
-      alert("File size exceeds 50MB limit. Please use a link instead.");
+      setUploadError('File size exceeds 50MB limit. Please paste a cloud link instead.');
       return;
     }
 
@@ -1082,13 +936,12 @@ function UploadModal({ onClose }: { onClose: () => void }) {
     setProgress(0);
     progressRef.current = 0;
     
-    // Safety check every 4 seconds
     let attempts = 0;
     const uploadInterval = setInterval(() => {
       attempts++;
       if (progressRef.current < 2 && attempts >= 3) {
         clearInterval(uploadInterval);
-        alert("TRANSMISSION BLOCKED: Your network is preventing direct file transfers to our secure storage.\n\nSWITCHING TO LINK MODE: Please host your file on Google Drive/Dropbox and paste the link instead.");
+        setUploadError('Direct storage upload stalled. Switched to URL Link mode — paste a Google Drive or cloud URL instead.');
         setUploading(false);
         setUploadType('link');
         setProgress(0);
@@ -1110,8 +963,8 @@ function UploadModal({ onClose }: { onClose: () => void }) {
         }, 
         (error: any) => {
           clearInterval(uploadInterval);
-          console.error("Upload error:", error);
-          alert("Upload failed. We recommend using a direct link from Google Drive instead.");
+          console.error('Upload error:', error);
+          setUploadError('File upload failed. Please paste a direct https:// link instead.');
           setUploading(false);
           setProgress(0);
         }, 
@@ -1125,20 +978,27 @@ function UploadModal({ onClose }: { onClose: () => void }) {
       );
     } catch (err) {
       clearInterval(uploadInterval);
-      console.error("Setup error:", err);
+      console.error('Setup error:', err);
+      setUploadError('Unable to initialize storage upload. Please use a direct URL.');
       setUploading(false);
     }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title || !description || (!url && type !== 'course')) {
-      alert("Validation Error: All critical data fields must be populated.");
+    setUploadError(null);
+
+    if (!title.trim() || !description.trim() || (!url.trim() && type !== 'course')) {
+      setUploadError('All required fields must be filled in.');
+      return;
+    }
+
+    if (type !== 'course' && !getSafeHttpUrl(url)) {
+      setUploadError('Resource URL must start with http:// or https://');
       return;
     }
     
     setLoading(true);
-    console.log(`[ACTION] Create ${type}:`, { title, subject });
     try {
       if (type === 'course') {
         await dbService.createCourse({
@@ -1151,53 +1011,59 @@ function UploadModal({ onClose }: { onClose: () => void }) {
         await dbService.createMaterial({
           title,
           description,
-          type: type as any,
+          type,
           subject,
           url
         });
       }
-      console.log(`[SUCCESS] Create ${type} complete`);
+      onSuccess?.(`${type === 'course' ? 'Course' : 'Material'} "${title.trim()}" published.`);
       onClose();
     } catch (err: any) {
-      console.error(`[ERROR] Create ${type}:`, err);
-      let msg = err.message;
+      let msg = err?.message || 'Unable to publish resource.';
       try {
         const errorData = JSON.parse(err.message);
-        msg = `Error: ${errorData.error} (Operation: ${errorData.operationType} on ${errorData.path})`;
-      } catch (e) {}
-      alert(`Broadcast Interrupted: ${msg}`);
+        msg = `${errorData.error} (${errorData.operationType} on ${errorData.path})`;
+      } catch {}
+      setUploadError(msg);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-background/80 backdrop-blur-md p-6">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-background/80 backdrop-blur-md p-4 sm:p-6">
        <motion.div 
          initial={{ opacity: 0, scale: 0.95 }}
          animate={{ opacity: 1, scale: 1 }}
-         className="max-w-2xl w-full bg-card border border-border p-10 rounded-[3rem] shadow-2xl space-y-8 max-h-[90vh] overflow-y-auto"
+         className="max-w-2xl w-full bg-card border border-border p-5 sm:p-10 rounded-3xl sm:rounded-[3rem] shadow-2xl space-y-6 sm:space-y-8 max-h-[95vh] sm:max-h-[90vh] overflow-y-auto custom-scrollbar"
        >
           <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-3xl font-black italic tracking-tight">Broadcast Resource</h2>
-              <p className="text-xs text-muted-foreground mt-1 font-medium italic">Distribute new data to student nodes</p>
-            </div>
-            <div className="flex flex-col items-end">
-               <ShieldCheck className="text-primary mb-1" size={24} />
-               <span className="text-[8px] font-black uppercase tracking-widest text-primary">Mentor Core</span>
-            </div>
+             <div>
+               <h2 className="text-xl sm:text-3xl font-black italic tracking-tight">Broadcast Resource</h2>
+               <p className="text-[10px] sm:text-xs text-muted-foreground mt-1 font-medium italic">Distribute new data to student nodes</p>
+             </div>
+             <div className="flex flex-col items-end">
+                <ShieldCheck className="text-primary mb-1 shrink-0" size={20} />
+                <span className="text-[7px] sm:text-[8px] font-black uppercase tracking-widest text-primary">Mentor Core</span>
+             </div>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-8">
-             <div className="flex bg-muted/30 p-1.5 rounded-2xl gap-1">
+          {uploadError && (
+            <div className="p-4 rounded-2xl bg-red-500/10 border border-red-500/30 text-red-500 text-xs font-bold flex items-center gap-3">
+              <AlertCircle size={16} className="shrink-0" />
+              <span>{uploadError}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleSubmit} className="space-y-6 sm:space-y-8">
+             <div className="flex bg-muted/30 p-1 rounded-2xl gap-0.5 sm:gap-1">
                 {(['video', 'pdf', 'book', 'course'] as const).map(t => (
                   <button
                     key={t}
                     type="button"
                     onClick={() => setType(t)}
                     className={cn(
-                      "flex-1 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
+                      "flex-1 py-2 sm:py-3 rounded-xl text-[8px] sm:text-[10px] font-black uppercase tracking-widest transition-all",
                       type === t ? "bg-background shadow-sm text-primary" : "text-muted-foreground hover:bg-muted"
                     )}
                   >

@@ -1,20 +1,26 @@
 import React, { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import { Video, Book as BookIcon, Terminal, FlaskConical, Binary, Atom, Dna, Beaker, ChevronRight, PlayCircle, Download } from 'lucide-react';
+import { Video, Book as BookIcon, Binary, Atom, Dna, Beaker, ChevronRight, PlayCircle, Download } from 'lucide-react';
 import { dbService } from '../services/db';
+import { useAuth } from '../hooks/useAuth';
 import { Material, Subject } from '../types';
+import { MaterialViewer } from './Dashboard';
 import PythonIDE from './PythonIDE';
 import VirtualLab from './VirtualLab';
 
 export default function SubjectView() {
   const { id } = useParams<{ id: string }>();
+  const { user } = useAuth();
   const [materials, setMaterials] = useState<Material[]>([]);
+  const [selectedMaterial, setSelectedMaterial] = useState<Material | null>(null);
   const [activeTab, setActiveTab] = useState<'content' | 'tool'>('content');
 
   useEffect(() => {
     if (id) {
-       dbService.getMaterials(id as Subject).then(setMaterials);
+       dbService.getMaterials(id as Subject).then(setMaterials).catch((err) => {
+         console.error('Failed to fetch subject materials:', err);
+       });
     }
   }, [id]);
 
@@ -66,7 +72,13 @@ export default function SubjectView() {
             className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
           >
             {materials.length > 0 ? (
-              materials.map(m => <MaterialCard key={m.id} material={m} />)
+              materials.map(m => (
+                <MaterialCard
+                  key={m.id}
+                  material={m}
+                  onOpen={() => setSelectedMaterial(m)}
+                />
+              ))
             ) : (
                 <div className="col-span-full space-y-10">
                    <div className="py-20 text-center bg-card border border-border rounded-[3rem] shadow-sm">
@@ -77,26 +89,26 @@ export default function SubjectView() {
                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                       {id === 'physics' && (
                         <>
-                          <StaticTopicCard title="Newtonian Mechanics" description="Forces, motion, and energy conservation. Includes vector diagrams and free-body analysis." icon={<Atom />} />
-                          <StaticTopicCard title="Electromagnetism" description="Electric fields, circuits, and magnetic induction. View diagrammatic representations of Lorentz force." icon={<Atom />} />
+                          <StaticTopicCard title="Newtonian Mechanics" description="Forces, motion, and energy conservation. Includes vector diagrams and free-body analysis." icon={<Atom />} onExplore={() => setActiveTab('tool')} />
+                          <StaticTopicCard title="Electromagnetism" description="Electric fields, circuits, and magnetic induction. View diagrammatic representations of Lorentz force." icon={<Atom />} onExplore={() => setActiveTab('tool')} />
                         </>
                       )}
                       {id === 'biology' && (
                         <>
-                          <StaticTopicCard title="Cellular Architecture" description="Organelle functions and protein synthesis. Detailed diagrams of mitochondria and ribosomes." icon={<Dna />} />
-                          <StaticTopicCard title="Genetics & DNA" description="Heredity patterns, Mendel's laws, and DNA replication stages." icon={<Dna />} />
+                          <StaticTopicCard title="Cellular Architecture" description="Organelle functions and protein synthesis. Detailed diagrams of mitochondria and ribosomes." icon={<Dna />} onExplore={() => setActiveTab('tool')} />
+                          <StaticTopicCard title="Genetics & DNA" description="Heredity patterns, Mendel's laws, and DNA replication stages." icon={<Dna />} onExplore={() => setActiveTab('tool')} />
                         </>
                       )}
                       {id === 'chemistry' && (
                         <>
-                          <StaticTopicCard title="Periodic Architecture" description="Atomic structure and chemical bonding types. Lewis dot diagrams explained." icon={<Beaker />} />
-                          <StaticTopicCard title="Organic Synthesis" description="Hydrocarbon structures and functional groups identification." icon={<Beaker />} />
+                          <StaticTopicCard title="Periodic Architecture" description="Atomic structure and chemical bonding types. Lewis dot diagrams explained." icon={<Beaker />} onExplore={() => setActiveTab('tool')} />
+                          <StaticTopicCard title="Organic Synthesis" description="Hydrocarbon structures and functional groups identification." icon={<Beaker />} onExplore={() => setActiveTab('tool')} />
                         </>
                       )}
                       {id === 'computer' && (
                         <>
-                          <StaticTopicCard title="Algorithm Design" description="Flowcharts and pseudocode strategies for problem solving." icon={<Binary />} />
-                          <StaticTopicCard title="Object Oriented Programming" description="Classes, inheritance, and encapsulation diagrams." icon={<Binary />} />
+                          <StaticTopicCard title="Algorithm Design" description="Flowcharts and pseudocode strategies for problem solving." icon={<Binary />} onExplore={() => setActiveTab('tool')} />
+                          <StaticTopicCard title="Object Oriented Programming" description="Classes, inheritance, and encapsulation diagrams." icon={<Binary />} onExplore={() => setActiveTab('tool')} />
                         </>
                       )}
                    </div>
@@ -117,20 +129,30 @@ export default function SubjectView() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      <AnimatePresence>
+        {selectedMaterial && (
+          <MaterialViewer
+            material={selectedMaterial}
+            onClose={() => setSelectedMaterial(null)}
+            onComplete={() => {
+              if (user) {
+                dbService.markComplete(user.uid, selectedMaterial.id).catch((err) => {
+                  console.error('Mark complete error:', err);
+                });
+              }
+            }}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }
 
-function MaterialCard({ material }: { material: Material }) {
-  const handleOpen = () => {
-    if (material.url) {
-      window.open(material.url, '_blank');
-    }
-  };
-
+function MaterialCard({ material, onOpen }: { material: Material; onOpen: () => void }) {
   return (
     <div 
-      onClick={handleOpen}
+      onClick={onOpen}
       className="group bg-card border border-border rounded-2xl p-6 hover:border-primary hover:shadow-xl transition-all cursor-pointer"
     >
       <div className="flex items-start justify-between mb-6">
@@ -149,7 +171,7 @@ function MaterialCard({ material }: { material: Material }) {
       <p className="text-sm text-muted-foreground line-clamp-2 mb-6 leading-relaxed">{material.description}</p>
       <div className="flex items-center justify-between pt-6 border-t border-border">
          <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
-           Shared on {material.createdAt ? new Date(material.createdAt.seconds * 1000).toLocaleDateString() : 'Recently'}
+           Shared on {material.createdAt ? new Date(material.createdAt.seconds ? material.createdAt.seconds * 1000 : material.createdAt).toLocaleDateString() : 'Recently'}
          </span>
          <ChevronRight size={16} className="text-primary opacity-0 group-hover:opacity-100 transition-opacity" />
       </div>
@@ -157,7 +179,7 @@ function MaterialCard({ material }: { material: Material }) {
   );
 }
 
-function StaticTopicCard({ title, description, icon }: { title: string, description: string, icon: React.ReactNode }) {
+function StaticTopicCard({ title, description, icon, onExplore }: { title: string, description: string, icon: React.ReactNode, onExplore: () => void }) {
   return (
     <div className="p-8 bg-card border border-border rounded-3xl group hover:border-primary/50 transition-all shadow-sm">
        <div className="mb-6 w-12 h-12 rounded-2xl bg-muted flex items-center justify-center text-primary group-hover:bg-primary group-hover:text-primary-foreground transition-colors">
@@ -165,7 +187,11 @@ function StaticTopicCard({ title, description, icon }: { title: string, descript
        </div>
        <h3 className="text-xl font-bold mb-3">{title}</h3>
        <p className="text-muted-foreground leading-relaxed text-sm mb-6">{description}</p>
-       <button className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-primary hover:gap-3 transition-all">
+       <button
+         type="button"
+         onClick={onExplore}
+         className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-primary hover:gap-3 transition-all"
+       >
           <span>Explore Module</span>
           <ChevronRight size={14} />
        </button>

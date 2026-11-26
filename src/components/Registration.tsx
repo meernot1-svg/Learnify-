@@ -6,11 +6,14 @@ import { useAuth } from '../hooks/useAuth';
 import { dbService } from '../services/db';
 import { UserRole } from '../types';
 
+import { isAdminEmail } from '../services/db';
+
 export default function Registration() {
   const { user, profile, refreshProfile } = useAuth();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [role, setRole] = useState<UserRole | null>(null);
+  const canSelfRegisterMentor = isAdminEmail(user?.email);
   
   // Use effect to handle existing profile
   React.useEffect(() => {
@@ -50,13 +53,10 @@ export default function Registration() {
         fatherName: formData.fatherName,
         phone: formData.phone,
         address: formData.address,
-        role,
+        role: canSelfRegisterMentor ? role : 'Student',
         achievements: [],
         createdAt: new Date()
       });
-      
-      // Add a small artificial delay to let Firestore index propagate if needed
-      await new Promise(resolve => setTimeout(resolve, 1000));
       
       await refreshProfile();
       navigate('/dashboard');
@@ -78,7 +78,14 @@ export default function Registration() {
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
               <button 
-                onClick={() => setRole('Mentor')}
+                onClick={() => {
+                  if (!canSelfRegisterMentor) {
+                    setError('Mentor accounts are verified by an administrator. Registering as Student — an admin can upgrade your role later.');
+                    setRole('Student');
+                    return;
+                  }
+                  setRole('Mentor');
+                }}
                 className="group p-10 bg-card border-2 border-border rounded-[3rem] text-left hover:border-primary transition-all relative overflow-hidden shadow-2xl shadow-primary/5"
               >
                 <div className="mb-8 w-16 h-16 rounded-2xl bg-muted flex items-center justify-center text-muted-foreground group-hover:bg-primary group-hover:text-primary-foreground transition-colors">
@@ -86,6 +93,9 @@ export default function Registration() {
                 </div>
                 <h3 className="text-4xl font-black mb-4 uppercase italic">Mentor</h3>
                 <p className="text-muted-foreground mb-4 leading-relaxed font-medium">I am here to architect curriculums, facilitate learning, and catalyze student potential.</p>
+                {!canSelfRegisterMentor && (
+                  <span className="text-[10px] font-black uppercase tracking-widest text-primary">Admin Approval Required</span>
+                )}
               </button>
               
               <button 

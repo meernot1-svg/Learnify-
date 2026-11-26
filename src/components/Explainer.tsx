@@ -10,6 +10,7 @@ export default function Explainer() {
   const [fileData, setFileData] = useState<{ b64: string, mime: string, name: string } | null>(null);
   const [explanation, setExplanation] = useState('');
   const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const outputRef = useRef<HTMLDivElement>(null);
 
   const handleDownload = async () => {
@@ -56,6 +57,7 @@ export default function Explainer() {
   const handleExplain = async () => {
     if ((!prompt.trim() && !fileData) || loading) return;
     setLoading(true);
+    setErrorMsg(null);
     try {
       const result = await aiService.explainConcept(
         prompt || "Explain the educational concepts depicted here", 
@@ -66,11 +68,7 @@ export default function Explainer() {
       setExplanation(result);
     } catch (error: any) {
       console.error("Explainer Error:", error);
-      if (error.message?.includes('401') || error.message?.includes('UNAUTHENTICATED')) {
-        alert("Neural synchronization failed: Invalid Authentication. Ensure your Gemini API Key is configured in the platform settings.");
-      } else {
-        alert("Neural analyzer failed to process this material. Check document size or format.");
-      }
+      setErrorMsg(error?.message || "Neural analyzer failed to process this material. Check document size or format.");
     } finally {
       setLoading(false);
     }
@@ -90,7 +88,7 @@ export default function Explainer() {
         {/* Input Pane */}
         <div className="space-y-6">
           <div 
-            className="aspect-square bg-muted/50 border-4 border-dashed border-border rounded-[3rem] flex flex-col items-center justify-center p-10 relative overflow-hidden group cursor-pointer hover:border-primary/50 transition-all"
+            className="aspect-auto md:aspect-square bg-muted/50 border-4 border-dashed border-border rounded-3xl md:rounded-[3rem] flex flex-col items-center justify-center p-6 md:p-10 min-h-[300px] relative overflow-hidden group cursor-pointer hover:border-primary/50 transition-all"
             onClick={() => document.getElementById('file-upload')?.click()}
           >
             {fileData ? (
@@ -139,6 +137,12 @@ export default function Explainer() {
                placeholder="e.g., Explain photosynthesis with a diagram" 
                className="w-full bg-muted border border-border rounded-2xl py-4 px-6 focus:outline-none focus:ring-2 focus:ring-primary/20 mb-6 font-medium"
              />
+             {errorMsg && (
+               <div className="mb-4 p-4 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-500 text-xs font-bold flex items-center gap-2">
+                 <AlertCircle size={16} className="shrink-0" />
+                 <span>{errorMsg}</span>
+               </div>
+             )}
              <button
                onClick={handleExplain}
                disabled={(!prompt.trim() && !fileData) || loading}
@@ -151,28 +155,28 @@ export default function Explainer() {
         </div>
 
         {/* Output Pane */}
-        <div className="relative group">
+        <div className="relative flex flex-col group">
           <div 
             ref={outputRef}
-            className="bg-card border border-border rounded-[3rem] p-10 shadow-xl overflow-auto min-h-[500px]"
+            className="bg-card border border-border rounded-3xl md:rounded-[3rem] p-6 md:p-10 shadow-xl overflow-auto min-h-[400px] md:min-h-[500px]"
           >
              {explanation ? (
-               <div className="markdown-body">
-                  <Markdown>{explanation}</Markdown>
-               </div>
+                <div className="markdown-body">
+                   <Markdown>{explanation}</Markdown>
+                </div>
              ) : (
-               <div className="h-full flex flex-col items-center justify-center text-center opacity-40">
-                  <Search size={48} className="mb-6" />
-                  <p className="text-xl font-bold">Analysis Pending</p>
-                  <p className="text-sm max-w-[200px]">Upload an image and click explain to see magic here.</p>
-               </div>
+                <div className="h-full flex flex-col items-center justify-center text-center opacity-40 py-20">
+                   <Search size={48} className="mb-6 mx-auto" />
+                   <p className="text-xl font-bold">Analysis Pending</p>
+                   <p className="text-sm max-w-[200px] mx-auto mt-2">Upload an image and click explain to see magic here.</p>
+                </div>
              )}
           </div>
           
           {explanation && !loading && (
             <button
               onClick={handleDownload}
-              className="absolute top-6 right-6 p-4 bg-primary text-primary-foreground rounded-2xl shadow-xl hover:scale-105 transition-all flex items-center gap-2 font-bold text-xs uppercase tracking-widest z-10"
+              className="mt-4 sm:mt-0 sm:absolute sm:top-6 sm:right-6 w-full sm:w-auto p-4 bg-primary text-primary-foreground rounded-2xl shadow-xl hover:scale-105 transition-all flex items-center justify-center gap-2 font-bold text-xs uppercase tracking-widest z-10"
             >
               <Download size={16} />
               Download as Image

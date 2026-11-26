@@ -22,7 +22,6 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { useTheme } from '../hooks/useTheme';
-import { dbService } from '../services/db';
 import { auth } from '../lib/firebase';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -32,29 +31,13 @@ function cn(...inputs: ClassValue[]) {
 }
 
 export default function MobileNavigation() {
-  const { profile, refreshProfile } = useAuth();
+  const { profile } = useAuth();
   const { theme, setTheme } = useTheme();
   const navigate = useNavigate();
   const location = useLocation();
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
 
-  const handleSwitchRole = async () => {
-    if (!profile) return;
-    const newRole = profile.role === 'Mentor' ? 'Student' : 'Mentor';
-    if (!confirm(`Switching operational identity to ${newRole}. Proceed?`)) return;
-    
-    try {
-      await dbService.updateUserProfile(profile.uid, { role: newRole });
-      await refreshProfile();
-      setIsDrawerOpen(false);
-      navigate('/dashboard');
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
   const handleLogout = async () => {
-    if (!confirm('Are you sure you want to log out?')) return;
     await auth.signOut();
     setIsDrawerOpen(false);
     navigate('/');
@@ -188,14 +171,6 @@ export default function MobileNavigation() {
                         </div>
                       </div>
                     </div>
-                    
-                    <button 
-                      onClick={handleSwitchRole}
-                      className="flex items-center justify-center gap-2 w-full py-3 bg-card hover:bg-muted-foreground/10 border border-border rounded-xl text-[10px] font-black uppercase tracking-widest text-muted-foreground hover:text-primary transition-all active:scale-[0.98]"
-                    >
-                      <RefreshCcw size={12} />
-                      Switch Identity
-                    </button>
                   </div>
                 )}
 
@@ -275,11 +250,16 @@ export default function MobileNavigation() {
               <div className="p-6 border-t border-border bg-muted/10">
                 <button
                   onClick={handleLogout}
-                  className="flex items-center justify-center gap-2 w-full py-4 bg-red-500/10 hover:bg-red-500 border border-red-500/20 text-red-500 hover:text-white font-bold text-sm rounded-2xl transition-all active:scale-[0.98]"
+                  className="flex items-center justify-center gap-2 w-full py-4 bg-red-500/10 hover:bg-red-500 border border-red-500/20 text-red-500 hover:text-white font-bold text-sm rounded-2xl transition-all active:scale-[0.98] mb-3"
                 >
                   <LogOut size={16} />
                   <span>Logout Protocol</span>
                 </button>
+                <div className="text-center">
+                  <span className="text-[10px] font-black uppercase tracking-[0.15em] text-muted-foreground/30 font-sans">
+                    Created by <span className="text-primary italic font-black">Safiullah</span>
+                  </span>
+                </div>
               </div>
             </motion.div>
           </>

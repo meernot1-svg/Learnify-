@@ -51,27 +51,30 @@ export default function Header() {
           </div>
 
           {!user ? (
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 sm:gap-2">
               <button
                 onClick={() => navigate('/login')}
-                className="flex items-center gap-2 px-4 py-2 text-sm font-medium hover:text-primary transition-colors"
+                className="flex items-center gap-1 px-2.5 py-1.5 sm:px-4 sm:py-2 text-xs sm:text-sm font-medium hover:text-primary transition-colors"
               >
-                <LogIn size={18} />
-                <span>Sign In</span>
+                <LogIn size={16} />
+                <span className="hidden xs:inline">Sign In</span>
               </button>
               <button
                 onClick={() => navigate('/login')}
-                className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
+                className="flex items-center gap-1.5 px-3 py-2 sm:px-4 sm:py-2 text-xs sm:text-sm font-bold bg-primary text-primary-foreground rounded-xl hover:bg-primary/90 transition-all shadow-md shadow-primary/10"
               >
-                <UserPlus size={18} />
-                <span>Sign Up</span>
+                <UserPlus size={16} />
+                <span>Join</span>
               </button>
             </div>
           ) : (
-            <div className="flex items-center gap-4">
-              <Link to="/dashboard" className="text-sm font-medium hover:text-primary transition-colors">
-                {profile?.displayName || user.email}
-                <span className="ml-2 text-xs opacity-60 bg-muted px-2 py-0.5 rounded-full capitalize">
+            <div className="flex items-center gap-2 sm:gap-4">
+              <Link to="/dashboard" className="text-sm font-bold hover:text-primary transition-colors flex items-center gap-2 max-w-[120px] sm:max-w-[200px]">
+                <div className="w-8 h-8 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold text-xs shrink-0 border border-primary/20">
+                  {profile?.displayName ? profile.displayName[0].toUpperCase() : 'U'}
+                </div>
+                <span className="truncate hidden xs:inline max-w-[80px] sm:max-w-none">{profile?.displayName || user.email?.split('@')[0]}</span>
+                <span className="text-[9px] opacity-60 bg-muted px-1.5 py-0.5 rounded-full capitalize shrink-0 hidden md:inline">
                   {profile?.role}
                 </span>
               </Link>
@@ -80,7 +83,7 @@ export default function Header() {
                 className="p-2 rounded-full hover:bg-red-500/10 text-red-500 transition-colors"
                 title="Logout"
               >
-                <LogOut size={20} />
+                <LogOut size={18} />
               </button>
             </div>
           )}

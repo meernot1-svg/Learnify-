@@ -1,4 +1,4 @@
-# Security Specification - EduPulse
+# Security Specification - Learnify
 
 ## Data Invariants
 1. Materials must have a valid subject from the allowed list.
@@ -7,6 +7,7 @@
 4. Users can only update their own profile (limited fields).
 5. Progress records can only be created/updated by the Student they belong to.
 6. Identity fields (uid, mentorId, userId) must match the authenticated user.
+7. Saved quizzes (`/savedQuizzes/{quizId}`) and lab results (`/labResults/{resultId}`) are private to the owning user (or Admin), require verified email for writes, enforce strict schema + size limits, and keep `id`, `userId`, and `createdAt` immutable.
 
 ## The "Dirty Dozen" Payloads (Rejected)
 1. **Identity Spoofing**: Student tries to create a Material as a Mentor.

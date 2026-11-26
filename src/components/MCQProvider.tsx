@@ -17,9 +17,17 @@ import {
   FileText, 
   Image as ImageIcon,
   Clock,
-  ShieldCheck
+  ShieldCheck,
+  Save,
+  Trash2,
+  Edit3,
+  Play,
+  BookOpen
 } from 'lucide-react';
 import { aiService } from '../services/ai';
+import { learningDataService } from '../services/learningData';
+import { useAuth } from '../hooks/useAuth';
+import { SavedQuiz } from '../types';
 import { cn } from '../lib/utils';
 
 export default function MCQProvider() {
@@ -27,6 +35,7 @@ export default function MCQProvider() {
   const [fileData, setFileData] = useState<{ b64: string, mime: string, name: string } | null>(null);
   const [mcqs, setMcqs] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [loadingMessage, setLoadingMessage] = useState('Synthesizing Test Parameters...');
   const [currentIdx, setCurrentIdx] = useState(0);
 
@@ -49,6 +58,7 @@ export default function MCQProvider() {
     }
     return () => clearInterval(msgInterval);
   }, [loading]);
+  const { user } = useAuth();
   const [userAnswers, setUserAnswers] = useState<Record<number, number>>({});
   const [showResults, setShowResults] = useState(false);
   const [showHint, setShowHint] = useState(false);
@@ -56,6 +66,38 @@ export default function MCQProvider() {
   const [isExamMode, setIsExamMode] = useState(false);
   const [questionTimer, setQuestionTimer] = useState(30);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [savedQuizzes, setSavedQuizzes] = useState<SavedQuiz[]>([]);
+  const [loadingSaved, setLoadingSaved] = useState(false);
+  const [savingQuiz, setSavingQuiz] = useState(false);
+  const [quizSavedId, setQuizSavedId] = useState<string | null>(null);
+  const [saveFeedback, setSaveFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [quizTitleInput, setQuizTitleInput] = useState('');
+  const [quizSubjectInput, setQuizSubjectInput] = useState('general');
+  const [quizNotesInput, setQuizNotesInput] = useState('');
+  const [editingQuizId, setEditingQuizId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editNotes, setEditNotes] = useState('');
+
+  const fetchSavedQuizzes = async () => {
+    if (!user?.uid) {
+      setSavedQuizzes([]);
+      return;
+    }
+    setLoadingSaved(true);
+    try {
+      const data = await learningDataService.getSavedQuizzes(user.uid);
+      setSavedQuizzes(data);
+    } catch (err: any) {
+      console.error('Failed to load saved quizzes:', err);
+    } finally {
+      setLoadingSaved(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchSavedQuizzes();
+  }, [user?.uid]);
 
   useEffect(() => {
     let interval: NodeJS.Timeout;
@@ -101,6 +143,7 @@ export default function MCQProvider() {
   const generate = async () => {
     if (!inputText.trim() && !fileData) return;
     setLoading(true);
+    setErrorMsg(null);
     
     try {
       let result;
@@ -118,16 +161,19 @@ export default function MCQProvider() {
         setCurrentIdx(0);
         setTimer(0);
         setQuestionTimer(30);
+        setQuizSavedId(null);
+        setSaveFeedback(null);
+        const suggestedTitle = fileData
+          ? fileData.name.replace(/\.[^/.]+$/, '').slice(0, 80)
+          : inputText.trim().split('\n')[0].slice(0, 60) || 'AI Neural Quiz';
+        setQuizTitleInput(suggestedTitle);
+        setQuizNotesInput('');
       } else {
-        alert("Synthesizer failed to extract enough distinct challenges. Please refine your material or try a different section.");
+        setErrorMsg("Synthesizer failed to extract enough distinct challenges. Please refine your material or try a different section.");
       }
     } catch (error: any) {
       console.error("MCQ Generation Error:", error);
-      if (error.message?.includes('401') || error.message?.includes('UNAUTHENTICATED')) {
-        alert("Neural synchronization failed: Invalid Authentication. Ensure your Gemini API Key is configured in the platform settings.");
-      } else {
-        alert("Neural synthesis interrupted. Check your network or the document size.");
-      }
+      setErrorMsg(error?.message || "Neural synthesis interrupted. Check your network or the document size.");
     } finally {
       setLoading(false);
     }
@@ -150,6 +196,87 @@ export default function MCQProvider() {
 
   const getScore = () => {
     return mcqs.reduce((acc, q, idx) => acc + (userAnswers[idx] === q.correctIndex ? 1 : 0), 0);
+  };
+
+  const handleSaveCurrentQuiz = async () => {
+    if (!user?.uid || mcqs.length === 0 || savingQuiz) return;
+    setSavingQuiz(true);
+    setSaveFeedback(null);
+    try {
+      const created = await learningDataService.createSavedQuiz({
+        title: quizTitleInput.trim() || 'MCQ Practice Session',
+        subject: quizSubjectInput,
+        questions: mcqs.map((q, idx) => ({
+          question: q.question,
+          options: q.options || [],
+          correctIndex: typeof q.correctIndex === 'number' ? q.correctIndex : 0,
+          selectedIndex: userAnswers[idx],
+          explanation: q.explanation,
+        })),
+        score: getScore(),
+        totalQuestions: mcqs.length,
+        timeSpentSeconds: timer,
+        isExamMode,
+        notes: quizNotesInput.trim(),
+      });
+      setQuizSavedId(created.id);
+      setSaveFeedback({ type: 'success', message: 'Quiz saved to your Firestore library.' });
+      setSavedQuizzes((prev) => [created, ...prev]);
+    } catch (err: any) {
+      setSaveFeedback({
+        type: 'error',
+        message: err?.message || 'Could not save quiz. Ensure your account email is verified.',
+      });
+    } finally {
+      setSavingQuiz(false);
+    }
+  };
+
+  const handleUpdateSavedQuiz = async (quizId: string) => {
+    setSaveFeedback(null);
+    try {
+      await learningDataService.updateSavedQuiz(quizId, {
+        title: editTitle.trim() || 'Untitled Quiz',
+        notes: editNotes.trim(),
+      });
+      setSavedQuizzes((prev) =>
+        prev.map((q) =>
+          q.id === quizId
+            ? { ...q, title: editTitle.trim() || q.title, notes: editNotes.trim() }
+            : q
+        )
+      );
+      setEditingQuizId(null);
+      setSaveFeedback({ type: 'success', message: 'Saved quiz updated.' });
+    } catch (err: any) {
+      setSaveFeedback({ type: 'error', message: err?.message || 'Failed to update saved quiz.' });
+    }
+  };
+
+  const handleDeleteSavedQuiz = async (quizId: string) => {
+    setSaveFeedback(null);
+    try {
+      await learningDataService.deleteSavedQuiz(quizId);
+      setSavedQuizzes((prev) => prev.filter((q) => q.id !== quizId));
+      setSaveFeedback({ type: 'success', message: 'Saved quiz deleted.' });
+    } catch (err: any) {
+      setSaveFeedback({ type: 'error', message: err?.message || 'Failed to delete saved quiz.' });
+    }
+  };
+
+  const handleLoadSavedQuiz = (quiz: SavedQuiz) => {
+    setMcqs(quiz.questions);
+    setUserAnswers({});
+    setShowResults(false);
+    setCurrentIdx(0);
+    setTimer(0);
+    setQuestionTimer(30);
+    setIsExamMode(quiz.isExamMode);
+    setQuizTitleInput(quiz.title);
+    setQuizSubjectInput(quiz.subject);
+    setQuizNotesInput(quiz.notes || '');
+    setQuizSavedId(null);
+    setSaveFeedback(null);
   };
 
   if (mcqs.length === 0) {
@@ -263,6 +390,12 @@ export default function MCQProvider() {
                </div>
             </div>
             
+            {errorMsg && (
+              <div className="mb-6 p-4 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-500 text-xs font-bold">
+                {errorMsg}
+              </div>
+            )}
+
             <button
               onClick={generate}
               disabled={loading || (!inputText.trim() && !fileData)}
@@ -273,6 +406,156 @@ export default function MCQProvider() {
             </button>
           </div>
         </motion.div>
+
+        {/* Saved Quizzes Library */}
+        {user && (
+          <section className="bg-card border border-border p-8 rounded-[2.5rem] shadow-xl space-y-6">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-primary/10 text-primary flex items-center justify-center">
+                  <BookOpen size={20} />
+                </div>
+                <div>
+                  <h2 className="text-xl font-bold tracking-tight">Saved Quizzes</h2>
+                  <p className="text-xs text-muted-foreground">
+                    Review past scores, update study notes, or replay any saved quiz.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={fetchSavedQuizzes}
+                disabled={loadingSaved}
+                className="px-4 py-2 rounded-xl border border-border text-xs font-bold hover:bg-muted transition-all flex items-center gap-2"
+              >
+                <RefreshCcw size={14} className={loadingSaved ? 'animate-spin' : ''} />
+                <span>Refresh</span>
+              </button>
+            </div>
+
+            {saveFeedback && (
+              <div
+                className={cn(
+                  'p-3 rounded-xl text-xs font-bold border',
+                  saveFeedback.type === 'success'
+                    ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-500'
+                    : 'bg-red-500/10 border-red-500/20 text-red-500'
+                )}
+              >
+                {saveFeedback.message}
+              </div>
+            )}
+
+            {loadingSaved ? (
+              <div className="py-8 flex items-center justify-center gap-2 text-muted-foreground text-sm">
+                <Loader2 size={18} className="animate-spin" />
+                <span>Loading saved quizzes...</span>
+              </div>
+            ) : savedQuizzes.length === 0 ? (
+              <p className="py-6 text-center text-sm text-muted-foreground">
+                No saved quizzes yet. Complete a quiz and click Save Quiz to store it here.
+              </p>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {savedQuizzes.map((quiz) => {
+                  const pct = Math.round((quiz.score / Math.max(1, quiz.totalQuestions)) * 100);
+                  const isEditing = editingQuizId === quiz.id;
+                  return (
+                    <div
+                      key={quiz.id}
+                      className="p-5 rounded-2xl border border-border bg-muted/20 flex flex-col gap-3"
+                    >
+                      {isEditing ? (
+                        <div className="space-y-3">
+                          <input
+                            type="text"
+                            value={editTitle}
+                            onChange={(e) => setEditTitle(e.target.value)}
+                            maxLength={120}
+                            placeholder="Quiz title"
+                            className="w-full px-3 py-2 rounded-xl bg-background border border-border text-sm font-semibold"
+                          />
+                          <textarea
+                            value={editNotes}
+                            onChange={(e) => setEditNotes(e.target.value)}
+                            maxLength={1000}
+                            rows={2}
+                            placeholder="Study notes..."
+                            className="w-full px-3 py-2 rounded-xl bg-background border border-border text-xs"
+                          />
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => handleUpdateSavedQuiz(quiz.id)}
+                              className="px-4 py-2 rounded-xl bg-primary text-primary-foreground text-xs font-bold"
+                            >
+                              Save Changes
+                            </button>
+                            <button
+                              onClick={() => setEditingQuizId(null)}
+                              className="px-4 py-2 rounded-xl bg-muted text-xs font-bold"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <span className="text-[10px] font-black uppercase tracking-widest text-primary">
+                                {quiz.subject} {quiz.isExamMode ? '• Exam' : ''}
+                              </span>
+                              <h3 className="font-bold text-base leading-snug">{quiz.title}</h3>
+                            </div>
+                            <span className="px-2.5 py-1 rounded-lg bg-primary/10 text-primary text-xs font-black shrink-0">
+                              {quiz.score}/{quiz.totalQuestions} ({pct}%)
+                            </span>
+                          </div>
+                          {quiz.notes && (
+                            <p className="text-xs text-muted-foreground italic line-clamp-2">
+                              {quiz.notes}
+                            </p>
+                          )}
+                          <div className="flex items-center justify-between pt-2 border-t border-border/50 mt-auto">
+                            <span className="text-[11px] text-muted-foreground">
+                              {quiz.totalQuestions} Qs • {formatTime(quiz.timeSpentSeconds)}
+                            </span>
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                onClick={() => handleLoadSavedQuiz(quiz)}
+                                className="px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-bold flex items-center gap-1"
+                              >
+                                <Play size={12} />
+                                <span>Replay</span>
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setEditingQuizId(quiz.id);
+                                  setEditTitle(quiz.title);
+                                  setEditNotes(quiz.notes || '');
+                                }}
+                                aria-label="Edit saved quiz"
+                                className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground"
+                              >
+                                <Edit3 size={14} />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteSavedQuiz(quiz.id)}
+                                aria-label="Delete saved quiz"
+                                className="p-1.5 rounded-lg hover:bg-red-500/10 text-red-500"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        )}
       </div>
     );
   }
@@ -484,11 +767,69 @@ export default function MCQProvider() {
                     {Math.round((getScore()/mcqs.length) * 100)}%
                   </div>
                   <h2 className="text-4xl font-bold mb-4 italic tracking-tight">{isExamMode ? 'Official Score Verification' : 'Neural Checkpoint Complete'}</h2>
-                  <p className="text-muted-foreground mb-10 text-lg">
+                  <p className="text-muted-foreground mb-6 text-lg">
                     {isExamMode 
                       ? `Final Exam Score: ${getScore()} / ${mcqs.length}. Total Time: ${formatTime(timer)}.` 
                       : `You achieved ${getScore()} out of ${mcqs.length} correct inferences.`}
                   </p>
+
+                  {user && (
+                    <div className="mb-8 p-5 rounded-2xl bg-muted/30 border border-border text-left space-y-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <input
+                          type="text"
+                          value={quizTitleInput}
+                          onChange={(e) => setQuizTitleInput(e.target.value)}
+                          maxLength={120}
+                          placeholder="Quiz title..."
+                          className="sm:col-span-2 px-3 py-2.5 rounded-xl bg-background border border-border text-sm font-semibold"
+                        />
+                        <select
+                          value={quizSubjectInput}
+                          onChange={(e) => setQuizSubjectInput(e.target.value)}
+                          className="px-3 py-2.5 rounded-xl bg-background border border-border text-sm font-semibold"
+                        >
+                          <option value="general">General</option>
+                          <option value="chemistry">Chemistry</option>
+                          <option value="physics">Physics</option>
+                          <option value="biology">Biology</option>
+                          <option value="computer">Computer</option>
+                        </select>
+                      </div>
+                      <input
+                        type="text"
+                        value={quizNotesInput}
+                        onChange={(e) => setQuizNotesInput(e.target.value)}
+                        maxLength={1000}
+                        placeholder="Optional study notes..."
+                        className="w-full px-3 py-2 rounded-xl bg-background border border-border text-xs"
+                      />
+                      {saveFeedback && (
+                        <p
+                          className={cn(
+                            'text-xs font-bold',
+                            saveFeedback.type === 'success' ? 'text-emerald-500' : 'text-red-500'
+                          )}
+                        >
+                          {saveFeedback.message}
+                        </p>
+                      )}
+                      <button
+                        onClick={handleSaveCurrentQuiz}
+                        disabled={savingQuiz || Boolean(quizSavedId)}
+                        className="w-full py-3 rounded-xl bg-emerald-600 text-white font-bold text-xs uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-emerald-500 transition-all disabled:opacity-60"
+                      >
+                        {savingQuiz ? (
+                          <Loader2 size={14} className="animate-spin" />
+                        ) : quizSavedId ? (
+                          <CheckCircle2 size={14} />
+                        ) : (
+                          <Save size={14} />
+                        )}
+                        <span>{quizSavedId ? 'Saved to Cloud' : 'Save Quiz Result'}</span>
+                      </button>
+                    </div>
+                  )}
                   
                   <div className="flex gap-4">
                     <button 
@@ -498,7 +839,7 @@ export default function MCQProvider() {
                       Try New Topic
                     </button>
                     <button 
-                      onClick={() => { setShowResults(false); setCurrentIdx(0); setUserAnswers({}); setTimer(0); }}
+                      onClick={() => { setShowResults(false); setCurrentIdx(0); setUserAnswers({}); setTimer(0); setQuizSavedId(null); setSaveFeedback(null); }}
                       className="flex-1 py-5 bg-primary text-primary-foreground rounded-2xl font-bold shadow-xl shadow-primary/20 hover:scale-105 transition-all uppercase tracking-widest text-xs"
                     >
                       Retry Challenge

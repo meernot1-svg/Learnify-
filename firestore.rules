@@ -13,58 +13,279 @@ service cloud.firestore {
 
     // Primitives
     function isSignedIn() { return request.auth != null; }
-    function isEmailVerified() { return isSignedIn(); }
-    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    function isEmailVerified() { return isSignedIn() && request.auth.token.email_verified == true; }
+    function isValidId(id) { return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
     function incoming() { return request.resource.data; }
     function existing() { return resource.data; }
-    function isAdmin() { 
-      return isSignedIn() && (request.auth.token.email == 'meernot1@gmail.com' || request.auth.token.email == 'safiullahbhangar1@gmail.com');
+    function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
+    function isAdmin() {
+      return isEmailVerified() && (
+        request.auth.token.email == 'meernot1@gmail.com' ||
+        request.auth.token.email == 'safiullahbhangar1@gmail.com'
+      );
     }
-
-    // Role-based helper
     function isMentor() {
-      return isSignedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'Mentor';
+      return isEmailVerified() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'Mentor';
     }
 
-    // 1. Users
+    // 1. Users (No PII stored here; PII is isolated in /users/{userId}/private/info)
     match /users/{userId} {
       function isValidUser(data) {
-        return data.keys().hasAll(['uid', 'email', 'role', 'username', 'fullName']) &&
-               data.uid == userId &&
-               data.role in ['Student', 'Mentor'];
+        return data.keys().hasAll(['uid', 'displayName', 'username', 'fullName', 'role', 'achievements', 'points', 'createdAt']) &&
+               data.keys().hasOnly(['uid', 'displayName', 'username', 'fullName', 'role', 'achievements', 'points', 'createdAt', 'level']) &&
+               data.uid is string && data.uid == userId && isValidId(data.uid) &&
+               data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100 &&
+               data.username is string && data.username.size() >= 1 && data.username.size() <= 50 &&
+               data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 100 &&
+               data.role in ['Student', 'Mentor'] &&
+               data.achievements is list && data.achievements.size() <= 100 &&
+               (data.achievements.size() == 0 || data.achievements[0] is string) &&
+               data.points is int && data.points >= 0 && data.points <= 1000000 &&
+               data.createdAt is timestamp &&
+               (!('level' in data) || (data.level is int && data.level >= 1 && data.level <= 100));
       }
-      allow read: if isSignedIn();
-      allow create: if isSignedIn() && isValidId(userId) && userId == request.auth.uid && isValidUser(incoming());
-      allow update: if isSignedIn() && (userId == request.auth.uid || isMentor() || isAdmin());
+
+      allow get: if isSignedIn() && isValidId(userId);
+      allow list: if isSignedIn() && (
+        resource.data.uid == request.auth.uid ||
+        resource.data.role == 'Student' ||
+        isAdmin()
+      );
+      allow create: if isEmailVerified() && isValidId(userId) && userId == request.auth.uid &&
+                      isValidUser(incoming()) &&
+                      incoming().createdAt == request.time &&
+                      (isAdmin() || incoming().role == 'Student') &&
+                      incoming().points == 0 &&
+                      incoming().achievements.size() == 0;
+      allow update: if isEmailVerified() && isValidId(userId) && isValidUser(incoming()) && (
+        (isAdmin() &&
+         incoming().uid == existing().uid &&
+         incoming().createdAt == existing().createdAt) ||
+        (isOwner(userId) &&
+         incoming().uid == existing().uid &&
+         incoming().role == existing().role &&
+         incoming().createdAt == existing().createdAt &&
+         incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'username', 'fullName', 'points', 'achievements'])) ||
+        (isMentor() &&
+         existing().role == 'Student' &&
+         incoming().uid == existing().uid &&
+         incoming().role == existing().role &&
+         incoming().createdAt == existing().createdAt &&
+         incoming().diff(existing()).affectedKeys().hasOnly(['achievements']))
+      );
+
+      // Isolated Private PII
+      match /private/{docId} {
+        function isValidPrivateInfo(data) {
+          return data.keys().hasAll(['email', 'updatedAt']) &&
+                 data.keys().hasOnly(['email', 'fatherName', 'phone', 'address', 'updatedAt']) &&
+                 data.email is string && data.email.size() <= 256 &&
+                 (!('fatherName' in data) || (data.fatherName is string && data.fatherName.size() <= 100)) &&
+                 (!('phone' in data) || (data.phone is string && data.phone.size() <= 40)) &&
+                 (!('address' in data) || (data.address is string && data.address.size() <= 300)) &&
+                 data.updatedAt is timestamp;
+        }
+
+        allow get: if isEmailVerified() && isValidId(userId) && isValidId(docId) && (isOwner(userId) || isAdmin());
+        allow create, update: if isEmailVerified() && isValidId(userId) && docId == 'info' &&
+                                (isOwner(userId) || isAdmin()) &&
+                                isValidPrivateInfo(incoming()) &&
+                                incoming().updatedAt == request.time;
+      }
     }
 
-    // Legacy collections
-    match /materials/{id} { 
-      allow read: if isSignedIn(); 
-      allow create: if isMentor() || isAdmin();
-      allow update, delete: if isSignedIn() && (resource.data.mentorId == request.auth.uid || isAdmin());
-    }
-    match /courses/{id} { 
-      allow read: if isSignedIn(); 
-      allow create: if isMentor() || isAdmin();
-      allow update, delete: if isSignedIn() && (resource.data.mentorId == request.auth.uid || isAdmin());
-    }
-    match /progress/{id} {
-      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow create, update: if isSignedIn() && incoming().userId == request.auth.uid;
-    }
-    match /reminders/{id} {
-      function isValidReminder(data) {
-        return data.keys().hasAll(['userId', 'subject', 'topic', 'time', 'isNotified', 'createdAt']) &&
-               data.userId == request.auth.uid &&
-               data.subject is string && data.subject.size() <= 100 &&
-               data.topic is string && data.topic.size() <= 200 &&
-               data.isNotified is bool;
+    // 2. Materials
+    match /materials/{materialId} {
+      function isValidMaterial(data) {
+        return data.keys().hasAll(['id', 'title', 'description', 'subject', 'type', 'url', 'mentorId', 'createdAt']) &&
+               data.keys().hasOnly(['id', 'title', 'description', 'subject', 'type', 'url', 'mentorId', 'createdAt', 'isPrioritized']) &&
+               data.id is string && data.id == materialId && isValidId(data.id) &&
+               data.title is string && data.title.size() >= 1 && data.title.size() <= 100 &&
+               data.description is string && data.description.size() <= 1000 &&
+               data.subject in ['computer', 'physics', 'biology', 'chemistry'] &&
+               data.type in ['video', 'book', 'pdf'] &&
+               data.url is string && data.url.size() >= 1 && data.url.size() <= 1000 &&
+               data.url.matches('^https?://.*') &&
+               data.mentorId is string && isValidId(data.mentorId) &&
+               data.createdAt is timestamp &&
+               (!('isPrioritized' in data) || data.isPrioritized is bool);
       }
-      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow create: if isSignedIn() && isValidReminder(incoming()) && isValidId(id);
-      allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin()) && isValidReminder(incoming());
-      allow delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+
+      allow get: if isSignedIn() && isValidId(materialId);
+      allow list: if isSignedIn();
+      allow create: if isEmailVerified() && isValidId(materialId) && isValidMaterial(incoming()) &&
+                      incoming().mentorId == request.auth.uid &&
+                      incoming().createdAt == request.time &&
+                      (isMentor() || isAdmin());
+      allow update: if isEmailVerified() && isValidId(materialId) && isValidMaterial(incoming()) &&
+                      incoming().id == existing().id &&
+                      incoming().mentorId == existing().mentorId &&
+                      incoming().createdAt == existing().createdAt &&
+                      (isAdmin() || (isMentor() && existing().mentorId == request.auth.uid)) &&
+                      incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'subject', 'type', 'url', 'isPrioritized']);
+      allow delete: if isEmailVerified() && isValidId(materialId) &&
+                      (isAdmin() || (isMentor() && existing().mentorId == request.auth.uid));
+    }
+
+    // 3. Courses
+    match /courses/{courseId} {
+      function isValidCourse(data) {
+        return data.keys().hasAll(['id', 'title', 'description', 'subject', 'mentorId', 'materialIds', 'createdAt']) &&
+               data.keys().hasOnly(['id', 'title', 'description', 'subject', 'mentorId', 'materialIds', 'createdAt', 'isPrioritized']) &&
+               data.id is string && data.id == courseId && isValidId(data.id) &&
+               data.title is string && data.title.size() >= 1 && data.title.size() <= 100 &&
+               data.description is string && data.description.size() <= 1000 &&
+               data.subject in ['computer', 'physics', 'biology', 'chemistry'] &&
+               data.mentorId is string && isValidId(data.mentorId) &&
+               data.materialIds is list && data.materialIds.size() <= 50 &&
+               (data.materialIds.size() == 0 || data.materialIds[0] is string) &&
+               data.createdAt is timestamp &&
+               (!('isPrioritized' in data) || data.isPrioritized is bool);
+      }
+
+      allow get: if isSignedIn() && isValidId(courseId);
+      allow list: if isSignedIn();
+      allow create: if isEmailVerified() && isValidId(courseId) && isValidCourse(incoming()) &&
+                      incoming().mentorId == request.auth.uid &&
+                      incoming().createdAt == request.time &&
+                      (isMentor() || isAdmin());
+      allow update: if isEmailVerified() && isValidId(courseId) && isValidCourse(incoming()) &&
+                      incoming().id == existing().id &&
+                      incoming().mentorId == existing().mentorId &&
+                      incoming().createdAt == existing().createdAt &&
+                      (isAdmin() || (isMentor() && existing().mentorId == request.auth.uid)) &&
+                      incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'subject', 'materialIds', 'isPrioritized']);
+      allow delete: if isEmailVerified() && isValidId(courseId) &&
+                      (isAdmin() || (isMentor() && existing().mentorId == request.auth.uid));
+    }
+
+    // 4. Progress
+    match /progress/{progressId} {
+      function isValidProgress(data) {
+        return data.keys().hasAll(['userId', 'materialId', 'status', 'updatedAt']) &&
+               data.keys().hasOnly(['userId', 'materialId', 'status', 'updatedAt']) &&
+               data.userId is string && isValidId(data.userId) &&
+               data.materialId is string && isValidId(data.materialId) &&
+               data.status == 'completed' &&
+               data.updatedAt is timestamp;
+      }
+
+      allow get: if isSignedIn() && isValidId(progressId) &&
+                   (resource.data.userId == request.auth.uid || isMentor() || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isEmailVerified() && isValidId(progressId) &&
+                      isValidProgress(incoming()) &&
+                      incoming().userId == request.auth.uid &&
+                      progressId == (request.auth.uid + '_' + incoming().materialId) &&
+                      incoming().updatedAt == request.time &&
+                      exists(/databases/$(database)/documents/materials/$(incoming().materialId));
+      allow update: if isAdmin() && isValidId(progressId) && isValidProgress(incoming()) &&
+                      incoming().updatedAt == request.time;
+    }
+
+    // 5. Reminders
+    match /reminders/{reminderId} {
+      function isValidReminder(data) {
+        return data.keys().hasAll(['id', 'userId', 'subject', 'topic', 'time', 'isNotified', 'createdAt']) &&
+               data.keys().hasOnly(['id', 'userId', 'subject', 'topic', 'time', 'isNotified', 'createdAt']) &&
+               data.id is string && data.id == reminderId && isValidId(data.id) &&
+               data.userId is string && isValidId(data.userId) &&
+               data.subject is string && data.subject.size() >= 1 && data.subject.size() <= 100 &&
+               data.topic is string && data.topic.size() >= 1 && data.topic.size() <= 200 &&
+               data.time is timestamp &&
+               data.isNotified is bool &&
+               data.createdAt is timestamp;
+      }
+
+      allow get: if isSignedIn() && isValidId(reminderId) &&
+                   (resource.data.userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isEmailVerified() && isValidId(reminderId) && isValidReminder(incoming()) &&
+                      incoming().userId == request.auth.uid &&
+                      incoming().createdAt == request.time;
+      allow update: if isEmailVerified() && isValidId(reminderId) && isValidReminder(incoming()) &&
+                      (existing().userId == request.auth.uid || isAdmin()) &&
+                      incoming().id == existing().id &&
+                      incoming().userId == existing().userId &&
+                      incoming().createdAt == existing().createdAt &&
+                      incoming().diff(existing()).affectedKeys().hasOnly(['isNotified', 'subject', 'topic', 'time']);
+      allow delete: if isEmailVerified() && isValidId(reminderId) &&
+                      (existing().userId == request.auth.uid || isAdmin());
+    }
+
+    // 6. Saved Quizzes
+    match /savedQuizzes/{quizId} {
+      function isValidSavedQuiz(data) {
+        return data.keys().hasAll(['id', 'userId', 'title', 'subject', 'questions', 'score', 'totalQuestions', 'timeSpentSeconds', 'isExamMode', 'notes', 'createdAt', 'updatedAt']) &&
+               data.keys().hasOnly(['id', 'userId', 'title', 'subject', 'questions', 'score', 'totalQuestions', 'timeSpentSeconds', 'isExamMode', 'notes', 'createdAt', 'updatedAt']) &&
+               data.id is string && data.id == quizId && isValidId(data.id) &&
+               data.userId is string && isValidId(data.userId) &&
+               data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
+               data.subject is string && data.subject.size() >= 1 && data.subject.size() <= 60 &&
+               data.questions is list && data.questions.size() >= 1 && data.questions.size() <= 50 &&
+               data.questions[0] is map &&
+               data.totalQuestions is int && data.totalQuestions >= 1 && data.totalQuestions <= 50 &&
+               data.score is int && data.score >= 0 && data.score <= data.totalQuestions &&
+               data.timeSpentSeconds is int && data.timeSpentSeconds >= 0 && data.timeSpentSeconds <= 86400 &&
+               data.isExamMode is bool &&
+               data.notes is string && data.notes.size() <= 1000 &&
+               data.createdAt is timestamp &&
+               data.updatedAt is timestamp;
+      }
+
+      allow get: if isSignedIn() && isValidId(quizId) &&
+                   (resource.data.userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isEmailVerified() && isValidId(quizId) && isValidSavedQuiz(incoming()) &&
+                      incoming().userId == request.auth.uid &&
+                      incoming().createdAt == request.time &&
+                      incoming().updatedAt == request.time;
+      allow update: if isEmailVerified() && isValidId(quizId) && isValidSavedQuiz(incoming()) &&
+                      (existing().userId == request.auth.uid || isAdmin()) &&
+                      incoming().id == existing().id &&
+                      incoming().userId == existing().userId &&
+                      incoming().createdAt == existing().createdAt &&
+                      incoming().updatedAt == request.time &&
+                      incoming().diff(existing()).affectedKeys().hasOnly(['title', 'subject', 'notes', 'score', 'timeSpentSeconds', 'questions', 'updatedAt']);
+      allow delete: if isEmailVerified() && isValidId(quizId) &&
+                      (existing().userId == request.auth.uid || isAdmin());
+    }
+
+    // 7. Lab Results
+    match /labResults/{resultId} {
+      function isValidLabResult(data) {
+        return data.keys().hasAll(['id', 'userId', 'experimentTitle', 'subject', 'outcome', 'formula', 'measurements', 'notes', 'createdAt', 'updatedAt']) &&
+               data.keys().hasOnly(['id', 'userId', 'experimentTitle', 'subject', 'outcome', 'formula', 'measurements', 'notes', 'createdAt', 'updatedAt']) &&
+               data.id is string && data.id == resultId && isValidId(data.id) &&
+               data.userId is string && isValidId(data.userId) &&
+               data.experimentTitle is string && data.experimentTitle.size() >= 1 && data.experimentTitle.size() <= 120 &&
+               data.subject in ['chemistry', 'physics', 'biology'] &&
+               data.outcome is string && data.outcome.size() >= 1 && data.outcome.size() <= 1000 &&
+               data.formula is string && data.formula.size() <= 200 &&
+               data.measurements is string && data.measurements.size() <= 1000 &&
+               data.notes is string && data.notes.size() <= 1000 &&
+               data.createdAt is timestamp &&
+               data.updatedAt is timestamp;
+      }
+
+      allow get: if isSignedIn() && isValidId(resultId) &&
+                   (resource.data.userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isEmailVerified() && isValidId(resultId) && isValidLabResult(incoming()) &&
+                      incoming().userId == request.auth.uid &&
+                      incoming().createdAt == request.time &&
+                      incoming().updatedAt == request.time;
+      allow update: if isEmailVerified() && isValidId(resultId) && isValidLabResult(incoming()) &&
+                      (existing().userId == request.auth.uid || isAdmin()) &&
+                      incoming().id == existing().id &&
+                      incoming().userId == existing().userId &&
+                      incoming().createdAt == existing().createdAt &&
+                      incoming().updatedAt == request.time &&
+                      incoming().diff(existing()).affectedKeys().hasOnly(['experimentTitle', 'subject', 'outcome', 'formula', 'measurements', 'notes', 'updatedAt']);
+      allow delete: if isEmailVerified() && isValidId(resultId) &&
+                      (existing().userId == request.auth.uid || isAdmin());
     }
   }
 }

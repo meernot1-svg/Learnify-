@@ -11,6 +11,7 @@ export default function PaperPredictor() {
   const [fileData, setFileData] = useState<{ b64: string, mime: string, name: string } | null>(null);
   const [prediction, setPrediction] = useState('');
   const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const outputRef = useRef<HTMLDivElement>(null);
 
@@ -58,6 +59,7 @@ export default function PaperPredictor() {
   const handlePredict = async () => {
     if (!content.trim() && !fileData) return;
     setLoading(true);
+    setErrorMsg(null);
 
     try {
       let result;
@@ -70,11 +72,7 @@ export default function PaperPredictor() {
       setPrediction(result);
     } catch (error: any) {
       console.error("Prediction Error:", error);
-      if (error.message?.includes('401') || error.message?.includes('UNAUTHENTICATED')) {
-        alert("Neural synchronization failed: Invalid Authentication. Ensure your Gemini API Key is configured in the platform settings.");
-      } else {
-        alert("Neural predictor could not synthesize a pattern. Try reducing the input or checking the file quality.");
-      }
+      setErrorMsg(error?.message || "Neural predictor could not synthesize a pattern. Try reducing the input or checking the file quality.");
     } finally {
       setLoading(false);
     }
@@ -92,7 +90,7 @@ export default function PaperPredictor() {
 
       <div className="bg-card border border-border rounded-[2.5rem] shadow-xl overflow-hidden grid grid-cols-1 md:grid-cols-2">
          {/* Input */}
-          <div className="p-10 border-b md:border-b-0 md:border-r border-border bg-muted/20">
+          <div className="p-6 sm:p-10 border-b md:border-b-0 md:border-r border-border bg-muted/20">
              <div className="flex items-center justify-between mb-6">
                 <div className="flex items-center gap-2 text-primary font-bold uppercase tracking-widest text-xs">
                    <History size={14} />
@@ -142,6 +140,12 @@ export default function PaperPredictor() {
                />
              )}
              
+             {errorMsg && (
+               <div className="mb-4 p-4 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-500 text-xs font-bold flex items-center gap-2">
+                 <AlertCircle size={16} className="shrink-0" />
+                 <span>{errorMsg}</span>
+               </div>
+             )}
              <button
               onClick={handlePredict}
               disabled={(!content.trim() && !fileData) || loading}
@@ -153,10 +157,21 @@ export default function PaperPredictor() {
          </div>
 
          {/* Output */}
-         <div className="p-10 flex flex-col bg-card relative group">
-            <div className="flex items-center gap-2 mb-6 text-green-500 font-bold uppercase tracking-widest text-xs">
-               <Trophy size={14} />
-               <span>Predicted Topics</span>
+         <div className="p-6 sm:p-10 flex flex-col bg-card relative group">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+               <div className="flex items-center gap-2 text-green-500 font-bold uppercase tracking-widest text-xs">
+                  <Trophy size={14} />
+                  <span>Predicted Topics</span>
+               </div>
+               {prediction && !loading && (
+                 <button
+                   onClick={handleDownload}
+                   className="p-3 bg-primary text-primary-foreground rounded-xl shadow-lg hover:scale-105 transition-all flex items-center gap-2 font-bold text-[10px] uppercase tracking-widest z-10 self-start sm:self-auto"
+                 >
+                   <Download size={14} />
+                   <span>Download Image</span>
+                 </button>
+               )}
             </div>
             <div className="flex-1 overflow-auto">
                {prediction ? (
@@ -172,15 +187,7 @@ export default function PaperPredictor() {
                )}
             </div>
 
-            {prediction && !loading && (
-              <button
-                onClick={handleDownload}
-                className="absolute top-6 right-10 p-3 bg-primary text-primary-foreground rounded-xl shadow-lg hover:scale-105 transition-all flex items-center gap-2 font-bold text-[10px] uppercase tracking-widest z-10"
-              >
-                <Download size={14} />
-                Download Image
-              </button>
-            )}
+            {/* Download button removed from absolute position */}
          </div>
       </div>
 

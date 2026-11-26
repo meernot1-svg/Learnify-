@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { Terminal, Play, RotateCcw, Copy } from 'lucide-react';
+import { Terminal, Play, RotateCcw } from 'lucide-react';
 
 const PYTHON_GUIDES = [
-  { title: "Hello EduPulse", desc: "Basic print statement output.", code: 'print("Hello EduPulse!")' },
+  { title: "Hello Learnify", desc: "Basic print statement output.", code: 'print("Hello Learnify!")' },
   { title: "Variable Logic", desc: "Assigning values to symbols.", code: 'a = 10\nb = 20\nprint(a + b)' },
   { title: "Syntax Error Check", desc: "What happens when you miss a quote?", code: 'print("Missing Quote)' },
   { title: "Math Operations", desc: "Multiply, divide and subtract.", code: 'print(10 * 5)\nprint(100 / 4)' },
@@ -17,47 +17,313 @@ const PYTHON_GUIDES = [
   { title: "Class Structure", desc: "OOP foundation basics.", code: 'class Robot:\n  pass\n\nprint("Robot Created")' },
   { title: "Library Import", desc: "Using math and other modules.", code: 'print("Importing physics data...")' },
   { title: "List Slicing", desc: "Getting parts of a collection.", code: 'data = [0, 1, 2, 3]\nprint(data[0:2])' },
-  { title: "While Loops", desc: "Condition-based repetition.", code: 'print("Looping until signal...")' },
+  { title: "While Loops", desc: "Condition-based repetition.", code: 'count = 0\nwhile count < 3:\n  print(f"Tick {count}")\n  count = count + 1' },
   { title: "Exception Handling", desc: "Try/Except safety protocols.", code: 'try:\n  print(1/0)\nexcept:\n  print("Error blocked")' },
   { title: "Data Parsing", desc: "Filtering information from text.", code: 'print("Extracting insights...")' },
   { title: "Algorithm Efficiency", desc: "Big O notation basics.", code: 'print("Complexity: O(n)")' },
   { title: "Binary Logic", desc: "Bitwise operations exploration.", code: 'print(bin(10))' }
 ];
 
+function formatPythonValue(val: unknown): string {
+  if (val === true) return 'True';
+  if (val === false) return 'False';
+  if (val === null || val === undefined) return 'None';
+  if (Array.isArray(val)) return '[' + val.map(formatPythonValue).join(', ') + ']';
+  if (typeof val === 'object') {
+    const entries = Object.entries(val as Record<string, unknown>).map(
+      ([k, v]) => `'${k}': ${formatPythonValue(v)}`
+    );
+    return '{' + entries.join(', ') + '}';
+  }
+  return String(val);
+}
+
+function checkSyntax(source: string): string | null {
+  const lines = source.split('\n');
+  for (let idx = 0; idx < lines.length; idx++) {
+    const line = lines[idx];
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+
+    let inSingle = false;
+    let inDouble = false;
+    let parenDepth = 0;
+    let bracketDepth = 0;
+
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '\\') {
+        i++;
+        continue;
+      }
+      if (ch === "'" && !inDouble) inSingle = !inSingle;
+      else if (ch === '"' && !inSingle) inDouble = !inDouble;
+      else if (!inSingle && !inDouble) {
+        if (ch === '#') break;
+        if (ch === '(') parenDepth++;
+        else if (ch === ')') parenDepth--;
+        else if (ch === '[') bracketDepth++;
+        else if (ch === ']') bracketDepth--;
+      }
+    }
+
+    if (inSingle || inDouble) {
+      return `SyntaxError: unterminated string literal (line ${idx + 1})`;
+    }
+    if (parenDepth !== 0 || bracketDepth !== 0) {
+      return `SyntaxError: unmatched brackets or parentheses (line ${idx + 1})`;
+    }
+  }
+  return null;
+}
+
+function evalPythonExpr(expr: string, env: Record<string, any>): any {
+  const trimmed = expr.trim();
+  if (trimmed === 'True') return true;
+  if (trimmed === 'False') return false;
+  if (trimmed === 'None') return null;
+
+  // f-string: f"..." or f'...'
+  if ((trimmed.startsWith('f"') && trimmed.endsWith('"')) || (trimmed.startsWith("f'") && trimmed.endsWith("'"))) {
+    const inner = trimmed.slice(2, -1);
+    return inner.replace(/\{([^}]+)\}/g, (_, code) => formatPythonValue(evalPythonExpr(code, env)));
+  }
+
+  // Plain string literal
+  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+    return trimmed.slice(1, -1);
+  }
+
+  // List slice: var[a:b]
+  const sliceMatch = trimmed.match(/^([a-zA-Z_]\w*)\[(\d*):(\d*)\]$/);
+  if (sliceMatch) {
+    const arr = env[sliceMatch[1]];
+    if (Array.isArray(arr)) {
+      const start = sliceMatch[2] ? Number(sliceMatch[2]) : 0;
+      const end = sliceMatch[3] ? Number(sliceMatch[3]) : arr.length;
+      return arr.slice(start, end);
+    }
+  }
+
+  // Built-ins
+  const binMatch = trimmed.match(/^bin\((.+)\)$/);
+  if (binMatch) {
+    const n = Number(evalPythonExpr(binMatch[1], env));
+    return '0b' + (n >>> 0).toString(2);
+  }
+  const lenMatch = trimmed.match(/^len\((.+)\)$/);
+  if (lenMatch) {
+    const v = evalPythonExpr(lenMatch[1], env);
+    return v?.length ?? 0;
+  }
+
+  // Safe JS evaluation of simple arithmetic, booleans, arrays, and objects using known env vars
+  const jsExpr = trimmed
+    .replace(/\bTrue\b/g, 'true')
+    .replace(/\bFalse\b/g, 'false')
+    .replace(/\bNone\b/g, 'null')
+    .replace(/\band\b/g, '&&')
+    .replace(/\bor\b/g, '||')
+    .replace(/\bnot\s+/g, '!');
+
+  const keys = Object.keys(env);
+  const vals = Object.values(env);
+  const fn = new Function(...keys, `"use strict"; return (${jsExpr});`);
+  const result = fn(...vals);
+  if (typeof result === 'number' && !Number.isFinite(result)) {
+    throw new Error('ZeroDivisionError: division by zero');
+  }
+  return result;
+}
+
+function executePythonSubset(source: string): string[] {
+  const syntaxErr = checkSyntax(source);
+  if (syntaxErr) return [`Error: ${syntaxErr}`];
+
+  const output: string[] = [];
+  const env: Record<string, any> = {};
+  const functions: Record<string, string[]> = {};
+  const rawLines = source.split('\n');
+
+  const runBlock = (lines: string[], startIdx: number, baseIndent: number): number => {
+    let i = startIdx;
+    while (i < lines.length) {
+      const line = lines[i];
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) {
+        i++;
+        continue;
+      }
+      const indent = line.length - line.trimStart().length;
+      if (indent < baseIndent) break;
+
+      if (trimmed === 'pass') {
+        i++;
+        continue;
+      }
+
+      if (trimmed.startsWith('class ')) {
+        // Skip class body cleanly
+        const classIndent = indent;
+        i++;
+        while (i < lines.length) {
+          const next = lines[i];
+          if (next.trim() && next.length - next.trimStart().length <= classIndent) break;
+          i++;
+        }
+        continue;
+      }
+
+      if (trimmed.startsWith('def ')) {
+        const fnMatch = trimmed.match(/^def\s+([a-zA-Z_]\w*)\(\)\s*:$/);
+        const defIndent = indent;
+        i++;
+        const body: string[] = [];
+        while (i < lines.length) {
+          const next = lines[i];
+          if (next.trim() && next.length - next.trimStart().length <= defIndent) break;
+          body.push(next);
+          i++;
+        }
+        if (fnMatch) functions[fnMatch[1]] = body;
+        continue;
+      }
+
+      if (trimmed.startsWith('try:')) {
+        const tryIndent = indent;
+        i++;
+        const tryBody: string[] = [];
+        while (i < lines.length) {
+          const next = lines[i];
+          if (next.trim() && next.length - next.trimStart().length <= tryIndent) break;
+          tryBody.push(next);
+          i++;
+        }
+        let exceptBody: string[] = [];
+        if (i < lines.length && lines[i].trim().startsWith('except')) {
+          i++;
+          while (i < lines.length) {
+            const next = lines[i];
+            if (next.trim() && next.length - next.trimStart().length <= tryIndent) break;
+            exceptBody.push(next);
+            i++;
+          }
+        }
+        try {
+          runBlock(tryBody, 0, tryIndent + 1);
+        } catch {
+          runBlock(exceptBody, 0, tryIndent + 1);
+        }
+        continue;
+      }
+
+      const forMatch = trimmed.match(/^for\s+([a-zA-Z_]\w*)\s+in\s+range\((\d+)\)\s*:$/);
+      if (forMatch) {
+        const loopVar = forMatch[1];
+        const count = Math.min(100, Number(forMatch[2]));
+        const loopIndent = indent;
+        i++;
+        const body: string[] = [];
+        while (i < lines.length) {
+          const next = lines[i];
+          if (next.trim() && next.length - next.trimStart().length <= loopIndent) break;
+          body.push(next);
+          i++;
+        }
+        for (let k = 0; k < count; k++) {
+          env[loopVar] = k;
+          runBlock(body, 0, loopIndent + 1);
+        }
+        continue;
+      }
+
+      const whileMatch = trimmed.match(/^while\s+(.+)\s*:$/);
+      if (whileMatch) {
+        const cond = whileMatch[1];
+        const loopIndent = indent;
+        i++;
+        const body: string[] = [];
+        while (i < lines.length) {
+          const next = lines[i];
+          if (next.trim() && next.length - next.trimStart().length <= loopIndent) break;
+          body.push(next);
+          i++;
+        }
+        let guard = 0;
+        while (evalPythonExpr(cond, env) && guard < 100) {
+          runBlock(body, 0, loopIndent + 1);
+          guard++;
+        }
+        continue;
+      }
+
+      const ifMatch = trimmed.match(/^if\s+(.+)\s*:$/);
+      if (ifMatch) {
+        const cond = ifMatch[1];
+        const ifIndent = indent;
+        i++;
+        const body: string[] = [];
+        while (i < lines.length) {
+          const next = lines[i];
+          if (next.trim() && next.length - next.trimStart().length <= ifIndent) break;
+          body.push(next);
+          i++;
+        }
+        if (evalPythonExpr(cond, env)) {
+          runBlock(body, 0, ifIndent + 1);
+        }
+        continue;
+      }
+
+      const printMatch = trimmed.match(/^print\((.*)\)$/);
+      if (printMatch) {
+        const val = evalPythonExpr(printMatch[1], env);
+        output.push(formatPythonValue(val));
+        i++;
+        continue;
+      }
+
+      const callMatch = trimmed.match(/^([a-zA-Z_]\w*)\(\)$/);
+      if (callMatch && functions[callMatch[1]]) {
+        runBlock(functions[callMatch[1]], 0, 1);
+        i++;
+        continue;
+      }
+
+      const assignMatch = trimmed.match(/^([a-zA-Z_]\w*)\s*=\s*(.+)$/);
+      if (assignMatch) {
+        env[assignMatch[1]] = evalPythonExpr(assignMatch[2], env);
+        i++;
+        continue;
+      }
+
+      i++;
+    }
+    return i;
+  };
+
+  try {
+    runBlock(rawLines, 0, 0);
+  } catch (err: any) {
+    output.push(`Error: ${err?.message || 'Runtime execution error.'}`);
+  }
+
+  return output.length > 0 ? output : ['> Program finished (no output)'];
+}
+
 export default function PythonIDE() {
-  const [code, setCode] = useState('print("Hello EduPulse!")\n\n# Try adding two numbers\na = 5\nb = 10\nprint(f"The sum of {a} and {b} is {a+b}")');
+  const [code, setCode] = useState('print("Hello Learnify!")\n\n# Try adding two numbers\na = 5\nb = 10\nprint(f"The sum of {a} and {b} is {a+b}")');
   const [output, setOutput] = useState<string[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [activeGuide, setActiveGuide] = useState<number | null>(null);
 
   const runCode = () => {
     setIsRunning(true);
-    const mockOutput: string[] = [];
-    try {
-      const lines = code.split('\n');
-      lines.forEach(line => {
-        if (line.includes('print(')) {
-          const match = line.match(/print\((.*)\)/);
-          if (match) {
-            let content = match[1].replace(/['"]/g, '');
-             if (content.includes('{a+b}')) content = content.replace('{a+b}', '15');
-             if (content.includes('{a}')) content = content.replace('{a}', '5');
-             if (content.includes('{b}')) content = content.replace('{b}', '10');
-             if (content.includes('{name}')) content = content.replace('{name}', 'Dev');
-             if (content.includes('{i}')) content = content.replace('{i}', '0');
-            mockOutput.push(content);
-          }
-        }
-      });
-      if (mockOutput.length === 0) mockOutput.push("> Program finished (no output)");
-    } catch (e) {
-      mockOutput.push("Error: Invalid syntax detected.");
-    }
-
+    const result = executePythonSubset(code);
     setTimeout(() => {
-      setOutput(mockOutput);
+      setOutput(result);
       setIsRunning(false);
-    }, 600);
+    }, 200);
   };
 
   const reset = () => {
@@ -68,7 +334,7 @@ export default function PythonIDE() {
 
   return (
     <div className="flex flex-col lg:flex-row gap-6">
-      <div className="lg:w-80 space-y-4 h-[600px] overflow-y-auto pr-2 scrollbar-hide">
+      <div className="lg:w-80 space-y-4 h-[250px] lg:h-[600px] overflow-y-auto pr-2 scrollbar-hide">
         <div className="p-6 bg-card border border-border rounded-3xl mb-4">
            <h3 className="font-bold mb-1">Code Guides</h3>
            <p className="text-[10px] text-muted-foreground uppercase font-black tracking-widest">20 Programming Tasks</p>

@@ -8,138 +8,222 @@ import {
   deleteDoc,
   query,
   where,
-  or,
-  orderBy,
-  onSnapshot,
-  Timestamp,
   serverTimestamp,
   arrayUnion,
-  limit
 } from 'firebase/firestore';
-import { db, auth } from '../lib/firebase';
+import { db, auth, OperationType, handleFirestoreError } from '../lib/firebase';
 import { UserProfile, Material, Course, Progress, Subject, StudyReminder } from '../types';
 
-enum OperationType {
-  CREATE = 'create',
-  UPDATE = 'update',
-  DELETE = 'delete',
-  LIST = 'list',
-  GET = 'get',
-  WRITE = 'write',
+const READ_TIMEOUT = 8000;
+const WRITE_TIMEOUT = 8000;
+const isBrowser = typeof window !== 'undefined';
+
+const ADMIN_EMAILS = ['meernot1@gmail.com', 'safiullahbhangar1@gmail.com'];
+
+export function isAdminEmail(email?: string | null): boolean {
+  return Boolean(email && ADMIN_EMAILS.includes(email.toLowerCase()));
 }
 
-interface FirestoreErrorInfo {
-  error: string;
-  operationType: OperationType;
-  path: string | null;
-  authInfo: {
-    userId?: string | null;
-    email?: string | null;
-    emailVerified?: boolean | null;
-    isAnonymous?: boolean | null;
-    tenantId?: string | null;
-    providerInfo?: {
-      providerId?: string | null;
-      email?: string | null;
-    }[];
+function isValidHttpUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
   }
 }
 
-const DB_TIMEOUT = 30000; // 30 seconds to allow for cold starts and rule evaluations
+const defaultMaterials: Material[] = [
+  {
+    id: 'mat_python_basics',
+    title: 'Interactive Python Basics',
+    description: 'Learn the fundamentals of Python programming including variables, control structures, and basic functions with interactive challenges.',
+    subject: 'computer',
+    type: 'video',
+    url: 'https://www.youtube.com/embed/kqtD5dpn9C8',
+    mentorId: 'mentor_sarah',
+    createdAt: { seconds: Math.floor(Date.now() / 1000) - 100000, nanoseconds: 0 },
+    isPrioritized: true,
+  },
+  {
+    id: 'mat_classical_mechanics',
+    title: 'Understanding Classical Mechanics',
+    description: 'Deep dive into Newtonian physics, force vectors, acceleration, and planetary motion with visual coordinate mappings.',
+    subject: 'physics',
+    type: 'video',
+    url: 'https://www.youtube.com/embed/b1t41Q3xRM8',
+    mentorId: 'mentor_james',
+    createdAt: { seconds: Math.floor(Date.now() / 1000) - 80000, nanoseconds: 0 },
+    isPrioritized: true,
+  },
+  {
+    id: 'mat_covalent_bonds',
+    title: 'Visualizing Covalent and Ionic Bonds',
+    description: 'An interactive video lesson detailing valence shell sharing, orbital overlap, electronegativity gradients, and molecular geometry.',
+    subject: 'chemistry',
+    type: 'video',
+    url: 'https://www.youtube.com/embed/hEKe5gHPHy0',
+    mentorId: 'mentor_david',
+    createdAt: { seconds: Math.floor(Date.now() / 1000) - 60000, nanoseconds: 0 },
+    isPrioritized: true,
+  },
+  {
+    id: 'mat_cellular_respiration',
+    title: 'Cellular Respiration and ATP Synthesis',
+    description: 'A high-yield animation exploring glycolysis, the Krebs cycle, electron transport chain gradient dynamics, and ATP synthesis.',
+    subject: 'biology',
+    type: 'video',
+    url: 'https://www.youtube.com/embed/eJ9Zjc-hyyY',
+    mentorId: 'mentor_elena',
+    createdAt: { seconds: Math.floor(Date.now() / 1000) - 40000, nanoseconds: 0 },
+    isPrioritized: true,
+  },
+];
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number = DB_TIMEOUT): Promise<T> {
-  let timerId: any;
+function getLocalList<T>(key: string, defaults: T[] = []): T[] {
+  if (!isBrowser) return defaults;
+  try {
+    const item = localStorage.getItem(key);
+    return item ? JSON.parse(item) : defaults;
+  } catch {
+    return defaults;
+  }
+}
+
+function setLocalList<T>(key: string, value: T[]): void {
+  if (!isBrowser) return;
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Ignore storage quota errors
+  }
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timerId: ReturnType<typeof setTimeout>;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timerId = setTimeout(() => {
-      console.error(`[TIMEOUT] Operation exceeded ${timeoutMs}ms`);
-      reject(new Error(`Operation timed out (${timeoutMs}ms). Check your connection or mentor permissions.`));
+      reject(new Error(`Operation timed out (${timeoutMs}ms)`));
     }, timeoutMs);
   });
 
   return Promise.race([
-    promise.then(res => {
+    promise.then((res) => {
       clearTimeout(timerId);
       return res;
     }),
-    timeoutPromise
+    timeoutPromise,
   ]);
 }
 
-function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const isTimeout = error instanceof Error && error.message.includes('timed out');
-  const isOfflineError = isTimeout || (error instanceof Error && (
-    error.message.includes('offline') || 
-    error.message.includes('unavailable') ||
-    error.message.includes('deadline-exceeded')
-  ));
-
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData?.map(provider => ({
-        providerId: provider.providerId,
-        email: provider.email,
-      })) || []
-    },
-    operationType,
-    path
-  }
-
-  // Log all errors to console
-  console.error('Firestore Error Detailed: ', JSON.stringify(errInfo));
-
-  // ALWAYS throw for writes/deletes/updates to prevent UI hangs on silent failures
-  if (operationType === OperationType.WRITE || 
-      operationType === OperationType.DELETE || 
-      operationType === OperationType.UPDATE || 
-      operationType === OperationType.CREATE) {
-    throw new Error(JSON.stringify(errInfo));
-  }
-
-  if (!isOfflineError) {
-    throw new Error(JSON.stringify(errInfo));
-  }
+function isOfflineError(error: unknown): boolean {
+  if (isBrowser && !navigator.onLine) return true;
+  const msg = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  return msg.includes('offline') || msg.includes('timed out') || msg.includes('network');
 }
 
 export const dbService = {
-  // User Profile
+  // User Profile (reads public profile + owner's private PII if permitted)
   async getUserProfile(uid: string): Promise<UserProfile | null> {
     const path = `users/${uid}`;
     try {
-      // Default getDoc handles cache automatically
-      const snap = await getDoc(doc(db, 'users', uid));
-      return snap.exists() ? (snap.data() as UserProfile) : null;
-    } catch (error: any) {
-      // If we are offline, we might want to still try and check cache 
-      // but getDoc usually does that. If it throws here, even cache failed.
+      const snap = await withTimeout(getDoc(doc(db, 'users', uid)), READ_TIMEOUT);
+      if (!snap.exists()) {
+        return null;
+      }
+      const data = snap.data() as UserProfile;
+
+      // Attempt to read private PII when viewing own profile or as admin
+      if (auth.currentUser?.uid === uid || isAdminEmail(auth.currentUser?.email)) {
+        try {
+          const privSnap = await withTimeout(getDoc(doc(db, 'users', uid, 'private', 'info')), READ_TIMEOUT);
+          if (privSnap.exists()) {
+            const priv = privSnap.data();
+            data.email = priv.email || data.email || '';
+            data.fatherName = priv.fatherName || '';
+            data.phone = priv.phone || '';
+            data.address = priv.address || '';
+          }
+        } catch {
+          // Non-fatal if private info doesn't exist yet
+        }
+      }
+
+      const local = getLocalList<UserProfile>('local_users');
+      setLocalList('local_users', [...local.filter((u) => u.uid !== uid), data]);
+      return data;
+    } catch (error) {
+      if (isOfflineError(error)) {
+        const local = getLocalList<UserProfile>('local_users');
+        return local.find((u) => u.uid === uid) || null;
+      }
       handleFirestoreError(error, OperationType.GET, path);
-      return null;
     }
   },
 
   async createUserProfile(profile: UserProfile): Promise<void> {
     const path = `users/${profile.uid}`;
+    const cleanFullName = (profile.fullName || '').trim().slice(0, 100) || 'Learner';
+    const cleanDisplayName = (profile.displayName || cleanFullName).trim().slice(0, 100) || cleanFullName;
+    const cleanUsername = (profile.username || '').trim().slice(0, 50) || `learner_${profile.uid.slice(0, 6)}`;
+    const publicDoc = {
+      uid: profile.uid,
+      displayName: cleanDisplayName,
+      username: cleanUsername,
+      fullName: cleanFullName,
+      role: isAdminEmail(auth.currentUser?.email) ? profile.role : 'Student',
+      achievements: [],
+      points: 0,
+      createdAt: serverTimestamp(),
+    };
+
+    const privateDoc = {
+      email: (profile.email || auth.currentUser?.email || '').slice(0, 256),
+      fatherName: (profile.fatherName || '').slice(0, 100),
+      phone: (profile.phone || '').slice(0, 40),
+      address: (profile.address || '').slice(0, 300),
+      updatedAt: serverTimestamp(),
+    };
+
     try {
-      await withTimeout(setDoc(doc(db, 'users', profile.uid), {
+      await withTimeout(setDoc(doc(db, 'users', profile.uid), publicDoc), WRITE_TIMEOUT);
+      await withTimeout(setDoc(doc(db, 'users', profile.uid, 'private', 'info'), privateDoc), WRITE_TIMEOUT);
+
+      const cachedProfile: UserProfile = {
         ...profile,
-        points: profile.points || 0,
-        achievements: profile.achievements || [],
-        createdAt: serverTimestamp()
-      }));
+        role: publicDoc.role,
+        points: 0,
+        achievements: [],
+        createdAt: { seconds: Math.floor(Date.now() / 1000), nanoseconds: 0 },
+      };
+      const local = getLocalList<UserProfile>('local_users');
+      setLocalList('local_users', [...local.filter((u) => u.uid !== profile.uid), cachedProfile]);
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, path);
+      handleFirestoreError(error, OperationType.CREATE, path);
     }
   },
 
   async updateUserProfile(uid: string, data: Partial<UserProfile>): Promise<void> {
     const path = `users/${uid}`;
+    const allowedPublic: Record<string, unknown> = {};
+    if (typeof data.displayName === 'string') allowedPublic.displayName = data.displayName.slice(0, 100);
+    if (typeof data.username === 'string') allowedPublic.username = data.username.slice(0, 50);
+    if (typeof data.fullName === 'string') allowedPublic.fullName = data.fullName.slice(0, 100);
+    if (isAdminEmail(auth.currentUser?.email) && (data.role === 'Student' || data.role === 'Mentor')) {
+      allowedPublic.role = data.role;
+    }
+
     try {
-      await withTimeout(updateDoc(doc(db, 'users', uid), data as any));
+      if (Object.keys(allowedPublic).length > 0) {
+        await withTimeout(updateDoc(doc(db, 'users', uid), allowedPublic), WRITE_TIMEOUT);
+      }
+
+      const local = getLocalList<UserProfile>('local_users');
+      const idx = local.findIndex((u) => u.uid === uid);
+      if (idx !== -1) {
+        local[idx] = { ...local[idx], ...allowedPublic } as UserProfile;
+        setLocalList('local_users', local);
+      }
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, path);
     }
@@ -149,33 +233,35 @@ export const dbService = {
     const path = `users/${userId}`;
     try {
       const userRef = doc(db, 'users', userId);
-      const userDoc = await withTimeout(getDoc(userRef));
-      
-      if (userDoc.exists()) {
-        const data = userDoc.data();
-        const currentPoints = data.points || 0;
-        const currentAchievements = data.achievements || [];
-        const newPoints = currentPoints + pointsToAdd;
-        
-        const newAchievements = [...currentAchievements];
-        const badges = [
-          { name: 'Novice Ops', threshold: 100 },
-          { name: 'Veteran Agent', threshold: 500 },
-          { name: 'Mission Master', threshold: 1000 },
-          { name: 'Tactical Genius', threshold: 2500 }
-        ];
+      const userDoc = await withTimeout(getDoc(userRef), READ_TIMEOUT);
+      if (!userDoc.exists()) return;
 
-        badges.forEach(badge => {
-          if (newPoints >= badge.threshold && !newAchievements.includes(badge.name)) {
-            newAchievements.push(badge.name);
-          }
-        });
+      const sData = userDoc.data();
+      const sPoints = typeof sData.points === 'number' ? sData.points : 0;
+      const sAchievements: string[] = Array.isArray(sData.achievements) ? sData.achievements : [];
+      const finalPoints = Math.min(1000000, sPoints + pointsToAdd);
 
-        await withTimeout(updateDoc(userRef, {
-          points: newPoints,
-          achievements: newAchievements
-        }));
-      }
+      const finalAchievements = [...sAchievements];
+      const badges = [
+        { name: 'Novice Ops', threshold: 100 },
+        { name: 'Veteran Agent', threshold: 500 },
+        { name: 'Mission Master', threshold: 1000 },
+        { name: 'Tactical Genius', threshold: 2500 },
+      ];
+
+      badges.forEach((badge) => {
+        if (finalPoints >= badge.threshold && !finalAchievements.includes(badge.name)) {
+          finalAchievements.push(badge.name);
+        }
+      });
+
+      await withTimeout(
+        updateDoc(userRef, {
+          points: finalPoints,
+          achievements: finalAchievements.slice(0, 100),
+        }),
+        WRITE_TIMEOUT
+      );
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, path);
     }
@@ -184,16 +270,16 @@ export const dbService = {
   async getLeaderboard(): Promise<UserProfile[]> {
     const path = 'users';
     try {
-      const q = query(
-        collection(db, 'users'),
-        orderBy('points', 'desc'),
-        limit(10)
-      );
-      const snapshot = await withTimeout(getDocs(q));
-      return snapshot.docs.map(doc => ({ uid: doc.id, ...doc.data() } as UserProfile));
+      const q = query(collection(db, 'users'), where('role', '==', 'Student'));
+      const snap = await withTimeout(getDocs(q), READ_TIMEOUT);
+      const serverUsers = snap.docs.map((d) => ({ uid: d.id, ...d.data() } as UserProfile));
+      return serverUsers.sort((a, b) => (b.points || 0) - (a.points || 0)).slice(0, 10);
     } catch (error) {
-      handleFirestoreError(error, OperationType.GET, path);
-      return [];
+      if (isOfflineError(error)) {
+        const local = getLocalList<UserProfile>('local_users');
+        return [...local].sort((a, b) => (b.points || 0) - (a.points || 0)).slice(0, 10);
+      }
+      handleFirestoreError(error, OperationType.LIST, path);
     }
   },
 
@@ -202,72 +288,81 @@ export const dbService = {
     const path = 'materials';
     try {
       const col = collection(db, 'materials');
-      const q = subject 
-        ? query(col, where('subject', '==', subject), orderBy('createdAt', 'desc'))
-        : query(col, orderBy('createdAt', 'desc'));
-      const snap = await getDocs(q);
-      return snap.docs.map(d => ({ id: d.id, ...d.data() } as Material));
+      const q = subject ? query(col, where('subject', '==', subject)) : query(col);
+      const snap = await withTimeout(getDocs(q), READ_TIMEOUT);
+      const serverMats = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Material));
+
+      if (serverMats.length === 0) {
+        // Provide curated starter video modules if no materials are published yet
+        return subject ? defaultMaterials.filter((m) => m.subject === subject) : defaultMaterials;
+      }
+
+      return serverMats.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
     } catch (error) {
-      handleFirestoreError(error, OperationType.GET, path);
-      return [];
+      if (isOfflineError(error)) {
+        const filtered = subject ? defaultMaterials.filter((m) => m.subject === subject) : defaultMaterials;
+        return filtered;
+      }
+      handleFirestoreError(error, OperationType.LIST, path);
     }
   },
 
-  async createMaterial(material: Omit<Material, 'id' | 'createdAt' | 'mentorId'>): Promise<void> {
-    const path = 'materials';
+  async createMaterial(material: Omit<Material, 'id' | 'createdAt' | 'mentorId'>): Promise<string> {
+    const uid = auth.currentUser?.uid;
+    if (!uid) throw new Error('You must be signed in to publish materials.');
+    if (!isValidHttpUrl(material.url)) {
+      throw new Error('Material URL must start with http:// or https://');
+    }
+
+    const matId = 'mat_' + Math.random().toString(36).substring(2, 11);
+    const path = `materials/${matId}`;
+    const payload = {
+      id: matId,
+      title: material.title.trim().slice(0, 100),
+      description: material.description.trim().slice(0, 1000),
+      subject: material.subject,
+      type: material.type,
+      url: material.url.trim().slice(0, 1000),
+      mentorId: uid,
+      isPrioritized: Boolean(material.isPrioritized),
+      createdAt: serverTimestamp(),
+    };
+
     try {
-      const uid = auth.currentUser?.uid;
-      if (!uid) throw new Error("Authentication required");
-      
-      const ref = doc(collection(db, 'materials'));
-      await withTimeout(setDoc(ref, {
-        ...material,
-        mentorId: uid,
-        createdAt: serverTimestamp()
-      }));
+      await withTimeout(setDoc(doc(db, 'materials', matId), payload), WRITE_TIMEOUT);
+      return matId;
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, path);
+      handleFirestoreError(error, OperationType.CREATE, path);
     }
   },
 
   async deleteMaterial(id: string): Promise<void> {
     const path = `materials/${id}`;
-    console.log(`[DB] Delete doc: ${path}`);
     try {
-      await withTimeout(deleteDoc(doc(db, 'materials', id)));
-      console.log(`[DB] Delete doc SUCCESS: ${path}`);
+      await withTimeout(deleteDoc(doc(db, 'materials', id)), WRITE_TIMEOUT);
     } catch (error) {
-      console.error(`[DB] Delete doc FAILED: ${path}`, error);
       handleFirestoreError(error, OperationType.DELETE, path);
     }
   },
 
-  // Admin utility to purge everything if stuck
   async purgeAllData(): Promise<void> {
-    console.log("[DB] Purging ALL materials and courses...");
+    const path = 'materials';
     try {
-      const mats = await withTimeout(getDocs(collection(db, 'materials')), 30000);
-      const courses = await withTimeout(getDocs(collection(db, 'courses')), 30000);
-      
-      const promises = [
-        ...mats.docs.map(d => deleteDoc(d.ref)),
-        ...courses.docs.map(d => deleteDoc(d.ref))
-      ];
-      
-      await withTimeout(Promise.all(promises), 60000);
-      console.log("[DB] Purge complete.");
-    } catch (e: any) {
-      console.error("[DB] Purge FAILED:", e);
-      throw e;
+      const mats = await withTimeout(getDocs(collection(db, 'materials')), READ_TIMEOUT);
+      const courses = await withTimeout(getDocs(collection(db, 'courses')), READ_TIMEOUT);
+      await withTimeout(
+        Promise.all([...mats.docs.map((d) => deleteDoc(d.ref)), ...courses.docs.map((d) => deleteDoc(d.ref))]),
+        WRITE_TIMEOUT
+      );
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, path);
     }
   },
 
   async toggleMaterialPriority(id: string, current: boolean): Promise<void> {
     const path = `materials/${id}`;
     try {
-      await withTimeout(updateDoc(doc(db, 'materials', id), {
-        isPrioritized: !current
-      }));
+      await withTimeout(updateDoc(doc(db, 'materials', id), { isPrioritized: !current }), WRITE_TIMEOUT);
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, path);
     }
@@ -278,50 +373,59 @@ export const dbService = {
     const path = 'courses';
     try {
       const col = collection(db, 'courses');
-      const q = subject 
-        ? query(col, where('subject', '==', subject), orderBy('createdAt', 'desc'))
-        : query(col, orderBy('createdAt', 'desc'));
-      const snap = await getDocs(q);
-      return snap.docs.map(d => ({ id: d.id, ...d.data() } as Course));
+      const q = subject ? query(col, where('subject', '==', subject)) : query(col);
+      const snap = await withTimeout(getDocs(q), READ_TIMEOUT);
+      const serverCourses = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Course));
+      return serverCourses.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
     } catch (error) {
-      handleFirestoreError(error, OperationType.GET, path);
-      return [];
+      if (isOfflineError(error)) return [];
+      handleFirestoreError(error, OperationType.LIST, path);
     }
   },
 
   async createCourse(course: Omit<Course, 'id' | 'createdAt' | 'mentorId'>): Promise<void> {
-    const path = 'courses';
-    try {
-      const uid = auth.currentUser?.uid;
-      if (!uid) throw new Error("Authentication required");
+    const uid = auth.currentUser?.uid;
+    if (!uid) throw new Error('You must be signed in to create courses.');
+    const courseId = 'course_' + Math.random().toString(36).substring(2, 11);
+    const path = `courses/${courseId}`;
 
-      const ref = doc(collection(db, 'courses'));
-      await withTimeout(setDoc(ref, {
-        ...course,
-        mentorId: uid,
-        createdAt: serverTimestamp()
-      }));
+    try {
+      await withTimeout(
+        setDoc(doc(db, 'courses', courseId), {
+          id: courseId,
+          title: course.title.trim().slice(0, 100),
+          description: course.description.trim().slice(0, 1000),
+          subject: course.subject,
+          mentorId: uid,
+          materialIds: (course.materialIds || []).slice(0, 50),
+          isPrioritized: Boolean(course.isPrioritized),
+          createdAt: serverTimestamp(),
+        }),
+        WRITE_TIMEOUT
+      );
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, path);
+      handleFirestoreError(error, OperationType.CREATE, path);
     }
   },
 
   async awardBadge(userId: string, badge: string): Promise<void> {
     const path = `users/${userId}`;
     try {
-      const ref = doc(db, 'users', userId);
-      await withTimeout(updateDoc(ref, {
-        achievements: arrayUnion(badge)
-      }));
+      await withTimeout(
+        updateDoc(doc(db, 'users', userId), {
+          achievements: arrayUnion(badge.trim().slice(0, 80)),
+        }),
+        WRITE_TIMEOUT
+      );
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, path);
+      handleFirestoreError(error, OperationType.UPDATE, path);
     }
   },
 
   async deleteCourse(id: string): Promise<void> {
     const path = `courses/${id}`;
     try {
-      await withTimeout(deleteDoc(doc(db, 'courses', id)));
+      await withTimeout(deleteDoc(doc(db, 'courses', id)), WRITE_TIMEOUT);
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, path);
     }
@@ -330,9 +434,7 @@ export const dbService = {
   async toggleCoursePriority(id: string, current: boolean): Promise<void> {
     const path = `courses/${id}`;
     try {
-      await withTimeout(updateDoc(doc(db, 'courses', id), {
-        isPrioritized: !current
-      }));
+      await withTimeout(updateDoc(doc(db, 'courses', id), { isPrioritized: !current }), WRITE_TIMEOUT);
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, path);
     }
@@ -340,38 +442,44 @@ export const dbService = {
 
   // Progress
   async getStudentProgress(userId: string): Promise<Progress[]> {
-    const path = `progress`;
+    const path = 'progress';
     try {
       const q = query(collection(db, 'progress'), where('userId', '==', userId));
-      const snap = await getDocs(q);
-      return snap.docs.map(d => ({ id: d.id, ...d.data() } as Progress));
+      const snap = await withTimeout(getDocs(q), READ_TIMEOUT);
+      return snap.docs.map((d) => ({ id: d.id, ...d.data() } as Progress));
     } catch (error) {
-      handleFirestoreError(error, OperationType.GET, path);
-      return [];
+      if (isOfflineError(error)) return [];
+      handleFirestoreError(error, OperationType.LIST, path);
     }
   },
 
   async markComplete(userId: string, materialId: string): Promise<void> {
-    const path = 'progress';
+    const progressId = `${userId}_${materialId}`;
+    const path = `progress/${progressId}`;
     try {
-      const id = `${userId}_${materialId}`;
-      const ref = doc(db, 'progress', id);
-      const snap = await getDoc(ref);
-      
-      // If already complete, don't award points again
-      if (snap.exists() && snap.data()?.status === 'completed') return;
+      const ref = doc(db, 'progress', progressId);
+      const existingSnap = await withTimeout(getDoc(ref), READ_TIMEOUT);
+      if (existingSnap.exists()) return;
 
-      await withTimeout(setDoc(ref, {
-        userId,
-        materialId,
-        status: 'completed',
-        updatedAt: serverTimestamp()
-      }));
+      // Ensure referenced material exists in Firestore before creating progress
+      const matSnap = await withTimeout(getDoc(doc(db, 'materials', materialId)), READ_TIMEOUT);
+      if (!matSnap.exists()) {
+        // Starter fallback materials aren't persisted in Firestore yet; skip DB write cleanly
+        return;
+      }
 
-      // Grant points for completing a module
+      await withTimeout(
+        setDoc(ref, {
+          userId,
+          materialId,
+          status: 'completed',
+          updatedAt: serverTimestamp(),
+        }),
+        WRITE_TIMEOUT
+      );
       await this.updatePoints(userId, 20);
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, path);
+      handleFirestoreError(error, OperationType.CREATE, path);
     }
   },
 
@@ -380,11 +488,11 @@ export const dbService = {
     const path = 'users';
     try {
       const q = query(collection(db, 'users'), where('role', '==', 'Student'));
-      const snap = await getDocs(q);
-      return snap.docs.map(d => ({ uid: d.id, ...d.data() } as UserProfile));
+      const snap = await withTimeout(getDocs(q), READ_TIMEOUT);
+      return snap.docs.map((d) => ({ uid: d.id, ...d.data() } as UserProfile));
     } catch (error) {
-      handleFirestoreError(error, OperationType.GET, path);
-      return [];
+      if (isOfflineError(error)) return [];
+      handleFirestoreError(error, OperationType.LIST, path);
     }
   },
 
@@ -392,41 +500,51 @@ export const dbService = {
   async getReminders(userId: string): Promise<StudyReminder[]> {
     const path = 'reminders';
     try {
-      const q = query(
-        collection(db, 'reminders'),
-        where('userId', '==', userId),
-        orderBy('time', 'asc')
-      );
-      const snap = await getDocs(q);
-      return snap.docs.map(d => ({ id: d.id, ...d.data() } as StudyReminder));
+      const q = query(collection(db, 'reminders'), where('userId', '==', userId));
+      const snap = await withTimeout(getDocs(q), READ_TIMEOUT);
+      const serverReminders = snap.docs.map((d) => {
+        const data = d.data();
+        return {
+          id: d.id,
+          ...data,
+          time: data.time?.seconds ? { seconds: data.time.seconds } : data.time,
+        } as StudyReminder;
+      });
+      return serverReminders.sort((a, b) => (a.time?.seconds || 0) - (b.time?.seconds || 0));
     } catch (error) {
-      handleFirestoreError(error, OperationType.GET, path);
-      return [];
+      if (isOfflineError(error)) return [];
+      handleFirestoreError(error, OperationType.LIST, path);
     }
   },
 
   async createReminder(reminder: Omit<StudyReminder, 'id' | 'createdAt' | 'userId' | 'isNotified'>): Promise<void> {
-    const path = 'reminders';
-    try {
-      const uid = auth.currentUser?.uid;
-      if (!uid) throw new Error("Authentication required");
+    const uid = auth.currentUser?.uid;
+    if (!uid) throw new Error('You must be signed in to set reminders.');
+    const reminderId = 'rem_' + Math.random().toString(36).substring(2, 11);
+    const path = `reminders/${reminderId}`;
 
-      const ref = doc(collection(db, 'reminders'));
-      await withTimeout(setDoc(ref, {
-        ...reminder,
-        userId: uid,
-        isNotified: false,
-        createdAt: serverTimestamp()
-      }));
+    try {
+      await withTimeout(
+        setDoc(doc(db, 'reminders', reminderId), {
+          id: reminderId,
+          userId: uid,
+          subject: String(reminder.subject).trim().slice(0, 100),
+          topic: String(reminder.topic).trim().slice(0, 200),
+          time: reminder.time instanceof Date ? reminder.time : new Date(reminder.time),
+          isNotified: false,
+          createdAt: serverTimestamp(),
+        }),
+        WRITE_TIMEOUT
+      );
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, path);
+      handleFirestoreError(error, OperationType.CREATE, path);
     }
   },
 
   async deleteReminder(id: string): Promise<void> {
     const path = `reminders/${id}`;
     try {
-      await withTimeout(deleteDoc(doc(db, 'reminders', id)));
+      await withTimeout(deleteDoc(doc(db, 'reminders', id)), WRITE_TIMEOUT);
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, path);
     }
@@ -435,11 +553,9 @@ export const dbService = {
   async markReminderNotified(id: string): Promise<void> {
     const path = `reminders/${id}`;
     try {
-      await withTimeout(updateDoc(doc(db, 'reminders', id), {
-        isNotified: true
-      }));
+      await withTimeout(updateDoc(doc(db, 'reminders', id), { isNotified: true }), WRITE_TIMEOUT);
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, path);
     }
-  }
+  },
 };

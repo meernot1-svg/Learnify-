@@ -1,5 +1,5 @@
 import React from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { NavLink } from 'react-router-dom';
 import { 
   LayoutDashboard, 
   MessageSquare, 
@@ -10,11 +10,9 @@ import {
   Dna, 
   Beaker,
   FileQuestion,
-  GraduationCap,
-  RefreshCcw
+  GraduationCap
 } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
-import { dbService } from '../services/db';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -23,22 +21,7 @@ function cn(...inputs: ClassValue[]) {
 }
 
 export default function Sidebar() {
-  const { profile, refreshProfile } = useAuth();
-  const navigate = useNavigate();
-
-  const handleSwitchRole = async () => {
-    if (!profile) return;
-    const newRole = profile.role === 'Mentor' ? 'Student' : 'Mentor';
-    if (!confirm(`Switching operational identity to ${newRole}. Proceed?`)) return;
-    
-    try {
-      await dbService.updateUserProfile(profile.uid, { role: newRole });
-      await refreshProfile();
-      navigate('/dashboard');
-    } catch (err) {
-      console.error(err);
-    }
-  };
+  const { profile } = useAuth();
 
   const navItems = [
     { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
@@ -107,7 +90,7 @@ export default function Sidebar() {
           <div className="flex flex-col gap-2">
             <div className="flex items-center gap-4 bg-card p-3 rounded-2xl border border-border shadow-sm">
               <div className="w-10 h-10 rounded-xl bg-primary text-primary-foreground flex items-center justify-center font-bold text-lg shadow-inner">
-                {profile.displayName[0]}
+                {profile.displayName?.[0] || 'U'}
               </div>
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-bold truncate leading-none mb-1">{profile.displayName}</p>
@@ -117,13 +100,11 @@ export default function Sidebar() {
                 </div>
               </div>
             </div>
-            <button 
-              onClick={handleSwitchRole}
-              className="flex items-center justify-center gap-2 w-full py-2 bg-muted hover:bg-border rounded-xl text-[9px] font-black uppercase tracking-widest text-muted-foreground hover:text-foreground transition-all"
-            >
-              <RefreshCcw size={12} />
-              Switch Identity
-            </button>
+            <div className="mt-3 text-center">
+              <span className="text-[10px] font-black uppercase tracking-[0.15em] text-muted-foreground/30 font-sans">
+                Created by <span className="text-primary italic font-black">Safiullah</span>
+              </span>
+            </div>
           </div>
         )}
       </div>

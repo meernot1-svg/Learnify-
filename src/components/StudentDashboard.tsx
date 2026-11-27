@@ -39,11 +39,17 @@ import {
   startOfWeek,
 } from 'date-fns';
 import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Legend,
   PolarAngleAxis,
   RadialBar,
   RadialBarChart,
   ResponsiveContainer,
   Tooltip,
+  XAxis,
+  YAxis,
 } from 'recharts';
 import { useAuth } from '../hooks/useAuth';
 import { dbService } from '../services/db';
@@ -166,6 +172,7 @@ export default function StudentDashboard() {
   const [typeFilter, setTypeFilter] = useState<'all' | MaterialType>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'todo' | 'completed'>('all');
   const [archiveTab, setArchiveTab] = useState<'all' | 'quizzes' | 'labs'>('all');
+  const [trackerView, setTrackerView] = useState<'subjects' | 'quizzes'>('subjects');
   const [weeklyGoalHours, setWeeklyGoalHours] = useState<number>(10);
   const [goalInput, setGoalInput] = useState<string>('10');
   const [goalSaved, setGoalSaved] = useState(false);
@@ -609,6 +616,78 @@ export default function StudentDashboard() {
     return Math.round(sum / savedQuizzes.length);
   }, [savedQuizzes]);
 
+  const labAndQuizTracker = useMemo(() => {
+    const labSubjects: Array<{ key: 'chemistry' | 'biology' | 'physics'; label: string; route: string }> = [
+      { key: 'chemistry', label: 'Chemistry', route: '/subject/chemistry' },
+      { key: 'biology', label: 'Biology', route: '/subject/biology' },
+      { key: 'physics', label: 'Physics', route: '/subject/physics' },
+    ];
+
+    const bySubject = [
+      ...labSubjects.map((s) => {
+        const labsDone = labResults.filter((l) => l.subject === s.key).length;
+        const subjectQuizzes = savedQuizzes.filter((q) => q.subject === s.key);
+        const avgQuiz =
+          subjectQuizzes.length > 0
+            ? Math.round(
+                subjectQuizzes.reduce(
+                  (acc, q) => acc + (q.score / Math.max(1, q.totalQuestions)) * 100,
+                  0
+                ) / subjectQuizzes.length
+              )
+            : 0;
+        const labPct = Math.min(100, Math.round((labsDone / 5) * 100));
+        return {
+          name: s.label,
+          key: s.key,
+          route: s.route,
+          labsCompleted: labsDone,
+          quizzesCompleted: subjectQuizzes.length,
+          labCompletionPct: labPct,
+          quizMasteryPct: avgQuiz,
+        };
+      }),
+      (() => {
+        const csGeneralQuizzes = savedQuizzes.filter(
+          (q) => q.subject === 'computer' || q.subject === 'general' || !['chemistry', 'biology', 'physics'].includes(q.subject)
+        );
+        const avgQuiz =
+          csGeneralQuizzes.length > 0
+            ? Math.round(
+                csGeneralQuizzes.reduce(
+                  (acc, q) => acc + (q.score / Math.max(1, q.totalQuestions)) * 100,
+                  0
+                ) / csGeneralQuizzes.length
+              )
+            : 0;
+        return {
+          name: 'CS & General',
+          key: 'computer',
+          route: '/mcqs',
+          labsCompleted: 0,
+          quizzesCompleted: csGeneralQuizzes.length,
+          labCompletionPct: 0,
+          quizMasteryPct: avgQuiz,
+        };
+      })(),
+    ];
+
+    const recentQuizzes = savedQuizzes.slice(0, 8).map((q) => {
+      const pct = Math.round((q.score / Math.max(1, q.totalQuestions)) * 100);
+      return {
+        name: q.title.length > 14 ? `${q.title.slice(0, 14)}...` : q.title,
+        fullTitle: q.title,
+        subject: q.subject,
+        scorePct: pct,
+        scoreLabel: `${q.score}/${q.totalQuestions}`,
+        questionsCount: q.totalQuestions,
+      };
+    });
+
+    const hasAnyActivity = labResults.length > 0 || savedQuizzes.length > 0;
+    return { bySubject, recentQuizzes, hasAnyActivity };
+  }, [labResults, savedQuizzes]);
+
   const upcomingReminders = useMemo(
     () => reminders.filter((r) => !r.isNotified),
     [reminders]
@@ -897,8 +976,222 @@ export default function StudentDashboard() {
 
       {/* Main Two-Column Workspace */}
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
-        {/* Left Primary Column: Priority Materials, Filterable Library, Courses */}
+        {/* Left Primary Column: Lab & Quiz Progress Tracker, Priority Materials, Filterable Library, Courses */}
         <div className="xl:col-span-7 space-y-6">
+          {/* Lab Experiments & Quizzes Progress Tracker (Recharts) */}
+          <section className="bg-card border border-border rounded-2xl p-6 space-y-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-base font-semibold text-foreground">
+                  Lab Experiments &amp; Quizzes Progress Tracker
+                </h2>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Completion status and mastery across virtual labs and saved MCQ assessments
+                </p>
+              </div>
+              <div className="flex items-center gap-1 p-1 bg-muted rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => setTrackerView('subjects')}
+                  className={cn(
+                    'px-3 py-1 rounded-lg text-xs font-medium transition-colors whitespace-nowrap',
+                    trackerView === 'subjects'
+                      ? 'bg-card text-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  By Subject
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTrackerView('quizzes')}
+                  className={cn(
+                    'px-3 py-1 rounded-lg text-xs font-medium transition-colors whitespace-nowrap',
+                    trackerView === 'quizzes'
+                      ? 'bg-card text-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  Quiz Scores
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="p-3 rounded-xl bg-muted/40 border border-border">
+                <p className="text-[11px] font-medium text-muted-foreground">Labs Completed</p>
+                <p className="text-lg font-bold text-foreground tabular-nums mt-0.5">
+                  {labResults.length}
+                </p>
+              </div>
+              <div className="p-3 rounded-xl bg-muted/40 border border-border">
+                <p className="text-[11px] font-medium text-muted-foreground">Quizzes Completed</p>
+                <p className="text-lg font-bold text-foreground tabular-nums mt-0.5">
+                  {savedQuizzes.length}
+                </p>
+              </div>
+              <div className="p-3 rounded-xl bg-muted/40 border border-border">
+                <p className="text-[11px] font-medium text-muted-foreground">Avg Quiz Score</p>
+                <p className="text-lg font-bold text-foreground tabular-nums mt-0.5">
+                  {avgQuizPct !== null ? `${avgQuizPct}%` : '—'}
+                </p>
+              </div>
+              <div className="p-3 rounded-xl bg-muted/40 border border-border">
+                <p className="text-[11px] font-medium text-muted-foreground">Bio &amp; Chem Labs</p>
+                <p className="text-lg font-bold text-foreground tabular-nums mt-0.5">
+                  {labResults.filter((l) => l.subject === 'biology' || l.subject === 'chemistry').length}
+                </p>
+              </div>
+            </div>
+
+            {learningLoading ? (
+              <div className="h-64 bg-muted animate-pulse rounded-xl" />
+            ) : trackerView === 'subjects' ? (
+              <div className="space-y-3">
+                <div className="h-64 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={labAndQuizTracker.bySubject}
+                      margin={{ top: 10, right: 12, left: -16, bottom: 4 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                      <XAxis
+                        dataKey="name"
+                        tick={{ fontSize: 12, fill: 'var(--muted-foreground)' }}
+                        axisLine={false}
+                        tickLine={false}
+                      />
+                      <YAxis
+                        domain={[0, 100]}
+                        tickFormatter={(val) => `${val}%`}
+                        tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }}
+                        axisLine={false}
+                        tickLine={false}
+                      />
+                      <Tooltip
+                        cursor={{ fill: 'var(--muted)', opacity: 0.4 }}
+                        content={({ active, payload }) => {
+                          if (!active || !payload || payload.length === 0) return null;
+                          const row = payload[0]?.payload as (typeof labAndQuizTracker.bySubject)[number] | undefined;
+                          if (!row) return null;
+                          return (
+                            <div className="bg-card border border-border rounded-xl px-3.5 py-2.5 shadow-lg text-xs space-y-1">
+                              <p className="font-semibold text-foreground">{row.name}</p>
+                              <p className="text-emerald-600 dark:text-emerald-400 tabular-nums">
+                                Lab Completion: {row.labCompletionPct}% ({row.labsCompleted} saved)
+                              </p>
+                              <p className="text-sky-600 dark:text-sky-400 tabular-nums">
+                                Quiz Mastery: {row.quizMasteryPct}% ({row.quizzesCompleted} quizzes)
+                              </p>
+                            </div>
+                          );
+                        }}
+                      />
+                      <Legend wrapperStyle={{ fontSize: 12 }} />
+                      <Bar
+                        dataKey="labCompletionPct"
+                        name="Lab Experiments (%)"
+                        fill="#10b981"
+                        radius={[6, 6, 0, 0]}
+                        maxBarSize={36}
+                      />
+                      <Bar
+                        dataKey="quizMasteryPct"
+                        name="Quiz Avg Score (%)"
+                        fill="#38bdf8"
+                        radius={[6, 6, 0, 0]}
+                        maxBarSize={36}
+                      />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+
+                {!labAndQuizTracker.hasAnyActivity && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-border text-xs text-muted-foreground">
+                    <span>Save a lab session in Biology/Chemistry or save an MCQ quiz to populate your bars.</span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => navigate('/subject/biology')}
+                        className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-500 transition-colors"
+                      >
+                        Biology Lab
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => navigate('/mcqs')}
+                        className="px-3 py-1.5 rounded-lg bg-primary text-primary-foreground font-semibold hover:opacity-90 transition-opacity"
+                      >
+                        MCQ Practice
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : labAndQuizTracker.recentQuizzes.length === 0 ? (
+              <div className="h-64 flex flex-col items-center justify-center text-center gap-3 border border-dashed border-border rounded-xl p-6">
+                <p className="text-sm text-muted-foreground">
+                  No saved quizzes yet. Complete and save an MCQ session to visualize individual quiz scores.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => navigate('/mcqs')}
+                  className="px-4 py-2 rounded-xl bg-primary text-primary-foreground text-xs font-semibold"
+                >
+                  Open MCQ Practice
+                </button>
+              </div>
+            ) : (
+              <div className="h-64 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={labAndQuizTracker.recentQuizzes}
+                    margin={{ top: 10, right: 12, left: -16, bottom: 4 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                    <XAxis
+                      dataKey="name"
+                      tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      domain={[0, 100]}
+                      tickFormatter={(val) => `${val}%`}
+                      tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <Tooltip
+                      cursor={{ fill: 'var(--muted)', opacity: 0.4 }}
+                      content={({ active, payload }) => {
+                        if (!active || !payload || payload.length === 0) return null;
+                        const row = payload[0]?.payload as (typeof labAndQuizTracker.recentQuizzes)[number] | undefined;
+                        if (!row) return null;
+                        return (
+                          <div className="bg-card border border-border rounded-xl px-3.5 py-2.5 shadow-lg text-xs space-y-1">
+                            <p className="font-semibold text-foreground">{row.fullTitle}</p>
+                            <p className="text-muted-foreground capitalize">Subject: {row.subject}</p>
+                            <p className="text-sky-600 dark:text-sky-400 font-semibold tabular-nums">
+                              Score: {row.scoreLabel} ({row.scorePct}%)
+                            </p>
+                          </div>
+                        );
+                      }}
+                    />
+                    <Bar
+                      dataKey="scorePct"
+                      name="Quiz Score (%)"
+                      fill="#6366f1"
+                      radius={[6, 6, 0, 0]}
+                      maxBarSize={40}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </section>
+
           {/* Priority Study Materials (only when prioritized items exist) */}
           {(materialsLoading || prioritizedMaterials.length > 0) && (
             <section className="bg-card border border-border rounded-2xl p-6 space-y-4">

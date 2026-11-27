@@ -18,8 +18,8 @@ export const aiService = {
     return data.text || '';
   },
 
-  async generateMcqs(content: string) {
-    const data = await postJson<{ mcqs: any[] }>('/api/ai/mcqs', { content });
+  async generateMcqs(content: string, count = 10, excludeQuestions: string[] = []) {
+    const data = await postJson<{ mcqs: any[] }>('/api/ai/mcqs', { content, count, excludeQuestions });
     return data.mcqs || [];
   },
 
@@ -33,11 +33,19 @@ export const aiService = {
     return data.text || '';
   },
 
-  async generateMcqsFromImage(prompt: string, base64Data: string, mimeType: string) {
+  async generateMcqsFromImage(
+    prompt: string,
+    base64Data: string,
+    mimeType: string,
+    count = 10,
+    excludeQuestions: string[] = []
+  ) {
     const data = await postJson<{ mcqs: any[] }>('/api/ai/mcqs', {
       content: prompt,
       base64Data,
       mimeType,
+      count,
+      excludeQuestions,
     });
     return data.mcqs || [];
   },

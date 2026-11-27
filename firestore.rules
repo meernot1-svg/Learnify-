@@ -224,9 +224,9 @@ service cloud.firestore {
                data.userId is string && isValidId(data.userId) &&
                data.title is string && data.title.size() >= 1 && data.title.size() <= 120 &&
                data.subject is string && data.subject.size() >= 1 && data.subject.size() <= 60 &&
-               data.questions is list && data.questions.size() >= 1 && data.questions.size() <= 50 &&
+               data.questions is list && data.questions.size() >= 1 && data.questions.size() <= 100 &&
                data.questions[0] is map &&
-               data.totalQuestions is int && data.totalQuestions >= 1 && data.totalQuestions <= 50 &&
+               data.totalQuestions is int && data.totalQuestions >= 1 && data.totalQuestions <= 100 &&
                data.score is int && data.score >= 0 && data.score <= data.totalQuestions &&
                data.timeSpentSeconds is int && data.timeSpentSeconds >= 0 && data.timeSpentSeconds <= 86400 &&
                data.isExamMode is bool &&

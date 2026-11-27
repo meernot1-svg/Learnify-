@@ -413,12 +413,21 @@ export function createApiApp(): express.Express {
     }
   });
 
-  // AI MCQ Generator (supports text and image/PDF)
+  // AI MCQ Generator (supports text and image/PDF, custom count 1-100)
   app.post('/api/ai/mcqs', async (req, res) => {
     try {
       const content = typeof req.body?.content === 'string' ? req.body.content.trim() : '';
       const base64Data = typeof req.body?.base64Data === 'string' ? req.body.base64Data : undefined;
       const mimeType = req.body?.mimeType;
+      const rawCount = Number(req.body?.count);
+      const requestedCount = Number.isFinite(rawCount)
+        ? Math.min(100, Math.max(1, Math.round(rawCount)))
+        : 10;
+      const excludeQuestions: string[] = Array.isArray(req.body?.excludeQuestions)
+        ? req.body.excludeQuestions
+            .filter((q: unknown): q is string => typeof q === 'string' && q.trim().length > 0)
+            .slice(-60)
+        : [];
 
       if (!content && !base64Data) {
         return res.status(400).json({ error: 'Provide text content or an uploaded document/image.' });
@@ -430,73 +439,126 @@ export function createApiApp(): express.Express {
         return res.status(400).json({ error: 'Unsupported file type. Please upload an image or PDF.' });
       }
 
-      const promptText = `Generate 5 challenging multiple-choice questions based on the following educational material:\n\n${
-        content || 'Analyze the uploaded material and formulate 5 accurate MCQs.'
-      }`;
-
-      if (getOpenRouterKey()) {
-        const userParts: OpenRouterContentPart[] = [];
-        if (base64Data && mimeType) {
-          userParts.push(buildOpenRouterAttachmentPart(base64Data, mimeType));
+      const normalizeMcq = (item: any) => {
+        if (!item || typeof item !== 'object') return null;
+        const question = typeof item.question === 'string' ? item.question.trim() : '';
+        const options = Array.isArray(item.options)
+          ? item.options.map((o: unknown) => String(o ?? '').trim()).filter(Boolean).slice(0, 4)
+          : [];
+        if (!question || options.length < 2) return null;
+        while (options.length < 4) {
+          options.push(`Option ${options.length + 1}`);
         }
-        userParts.push({
-          type: 'text',
-          text: `${promptText}\n\nReturn ONLY a raw JSON array of 5 objects with keys: "question" (string), "options" (array of 4 strings), and "correctIndex" (integer 0-3). Do not include markdown fences or extra text.`,
-        });
+        const rawIdx = Number(item.correctIndex);
+        const correctIndex = Number.isFinite(rawIdx)
+          ? Math.min(3, Math.max(0, Math.round(rawIdx)))
+          : 0;
+        return { question, options, correctIndex };
+      };
 
-        const text = await callOpenRouter(
-          [
-            {
-              role: 'system',
-              content:
-                'You are an educational assessment expert. Respond strictly with valid JSON matching the requested schema.',
-            },
-            { role: 'user', content: userParts },
-          ],
-          true
-        );
-        return res.json({ mcqs: parseJsonArrayResponse(text) });
-      }
+      const generateBatch = async (batchCount: number, avoidList: string[]) => {
+        const avoidBlock =
+          avoidList.length > 0
+            ? `\n\nAvoid repeating or rephrasing any of these already-generated questions:\n- ${avoidList
+                .slice(-30)
+                .join('\n- ')}`
+            : '';
 
-      const ai = getGeminiClient();
-      const parts: any[] = [];
-      if (base64Data && mimeType) {
-        parts.push({
-          inlineData: {
-            mimeType,
-            data: base64Data,
-          },
-        });
-      }
-      parts.push({ text: promptText });
+        const promptText = `Generate exactly ${batchCount} distinct, challenging multiple-choice questions based on the following educational material:\n\n${
+          content || `Analyze the uploaded material and formulate ${batchCount} accurate MCQs.`
+        }${avoidBlock}`;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-4-hydrogen',
-        contents: { parts },
-        config: {
-          systemInstruction:
-            'You are an educational assessment expert. Always return exactly 5 multiple choice questions with 4 answer options each and a 0-based correctIndex (0 to 3).',
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                question: { type: Type.STRING },
-                options: {
-                  type: Type.ARRAY,
-                  items: { type: Type.STRING },
-                },
-                correctIndex: { type: Type.INTEGER },
+        if (getOpenRouterKey()) {
+          const userParts: OpenRouterContentPart[] = [];
+          if (base64Data && mimeType) {
+            userParts.push(buildOpenRouterAttachmentPart(base64Data, mimeType));
+          }
+          userParts.push({
+            type: 'text',
+            text: `${promptText}\n\nReturn ONLY a raw JSON array of ${batchCount} objects with keys: "question" (string), "options" (array of 4 strings), and "correctIndex" (integer 0-3). Do not include markdown fences or extra text.`,
+          });
+
+          const text = await callOpenRouter(
+            [
+              {
+                role: 'system',
+                content:
+                  `You are an educational assessment expert. Respond strictly with valid JSON containing exactly ${batchCount} unique MCQs matching the requested schema.`,
               },
-              required: ['question', 'options', 'correctIndex'],
+              { role: 'user', content: userParts },
+            ],
+            true
+          );
+          return parseJsonArrayResponse(text).map(normalizeMcq).filter(Boolean);
+        }
+
+        const ai = getGeminiClient();
+        const parts: any[] = [];
+        if (base64Data && mimeType) {
+          parts.push({
+            inlineData: {
+              mimeType,
+              data: base64Data,
+            },
+          });
+        }
+        parts.push({ text: promptText });
+
+        const response = await ai.models.generateContent({
+          model: 'gemini-4-hydrogen',
+          contents: { parts },
+          config: {
+            systemInstruction:
+              `You are an educational assessment expert. Always return exactly ${batchCount} unique multiple choice questions with 4 answer options each and a 0-based correctIndex (0 to 3).`,
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  question: { type: Type.STRING },
+                  options: {
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING },
+                  },
+                  correctIndex: { type: Type.INTEGER },
+                },
+                required: ['question', 'options', 'correctIndex'],
+              },
             },
           },
-        },
-      });
+        });
 
-      const parsed = JSON.parse((response.text || '[]').trim());
-      return res.json({ mcqs: Array.isArray(parsed) ? parsed : [] });
+        const parsed = JSON.parse((response.text || '[]').trim());
+        return Array.isArray(parsed) ? parsed.map(normalizeMcq).filter(Boolean) : [];
+      };
+
+      const seen = new Set(excludeQuestions.map((q) => q.trim().toLowerCase()));
+      const collected: Array<{ question: string; options: string[]; correctIndex: number }> = [];
+      const avoid = [...excludeQuestions];
+
+      let attempts = 0;
+      const maxAttempts = Math.ceil(requestedCount / 20) + 2;
+      while (collected.length < requestedCount && attempts < maxAttempts) {
+        const remaining = requestedCount - collected.length;
+        const batchSize = Math.min(25, remaining);
+        const batch = await generateBatch(batchSize, avoid);
+        let addedInPass = 0;
+        for (const item of batch) {
+          if (!item) continue;
+          const key = item.question.toLowerCase();
+          if (seen.has(key)) continue;
+          seen.add(key);
+          collected.push(item);
+          avoid.push(item.question);
+          addedInPass++;
+          if (collected.length >= requestedCount) break;
+        }
+        attempts++;
+        if (addedInPass === 0 && batch.length === 0) break;
+      }
+
+      return res.json({ mcqs: collected.slice(0, requestedCount) });
     } catch (err) {
       const { status, message } = formatAiError(err);
       return res.status(status).json({ error: message });

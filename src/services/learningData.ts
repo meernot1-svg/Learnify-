@@ -128,7 +128,7 @@ function sanitizeQuestions(items: QuizQuestionItem[]): QuizQuestionItem[] {
     throw new Error('At least one question is required to save a quiz.');
   }
 
-  return items.slice(0, 50).map((item) => {
+  return items.slice(0, 100).map((item) => {
     const cleanOptions = Array.isArray(item.options)
       ? item.options.slice(0, 8).map((opt) => String(opt ?? '').trim().slice(0, 300))
       : [];
@@ -177,7 +177,7 @@ export const learningDataService = {
 
     const sanitizedQuestions = sanitizeQuestions(input.questions);
     const totalQuestions = Math.min(
-      50,
+      100,
       Math.max(1, Math.round(input.totalQuestions ?? sanitizedQuestions.length))
     );
     const score = Math.min(totalQuestions, Math.max(0, Math.round(Number(input.score) || 0)));

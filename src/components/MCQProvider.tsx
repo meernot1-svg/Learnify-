@@ -65,6 +65,8 @@ export default function MCQProvider() {
   const [timer, setTimer] = useState(0);
   const [isExamMode, setIsExamMode] = useState(false);
   const [questionTimer, setQuestionTimer] = useState(30);
+  const [mcqCount, setMcqCount] = useState<number>(10);
+  const [customCountInput, setCustomCountInput] = useState<string>('10');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [savedQuizzes, setSavedQuizzes] = useState<SavedQuiz[]>([]);
@@ -140,22 +142,72 @@ export default function MCQProvider() {
     }
   };
 
+  const applyMcqCount = (nextVal: number) => {
+    const clamped = Math.min(100, Math.max(1, Math.round(nextVal)));
+    setMcqCount(clamped);
+    setCustomCountInput(String(clamped));
+    return clamped;
+  };
+
   const generate = async () => {
     if (!inputText.trim() && !fileData) return;
+    const parsedInput = Number(customCountInput);
+    const targetCount = Number.isFinite(parsedInput) && parsedInput >= 1
+      ? applyMcqCount(parsedInput)
+      : mcqCount;
+
     setLoading(true);
     setErrorMsg(null);
     
     try {
-      let result;
-      if (fileData) {
-        const prompt = inputText || "Generate comprehensive MCQs based on the provided material.";
-        result = await aiService.generateMcqsFromImage(prompt, fileData.b64, fileData.mime);
-      } else {
-        result = await aiService.generateMcqs(inputText);
+      const seen = new Set<string>();
+      const collected: any[] = [];
+      const excludeList: string[] = [];
+      const maxPasses = Math.ceil(targetCount / 20) + 2;
+      let pass = 0;
+
+      while (collected.length < targetCount && pass < maxPasses) {
+        const remaining = targetCount - collected.length;
+        const batchSize = Math.min(25, remaining);
+        setLoadingMessage(
+          targetCount > 25
+            ? `Synthesizing ${targetCount} MCQs (${collected.length}/${targetCount} ready)...`
+            : `Synthesizing ${targetCount} MCQs...`
+        );
+
+        let batch: any[];
+        if (fileData) {
+          const prompt = inputText || `Generate ${batchSize} comprehensive MCQs based on the provided material.`;
+          batch = await aiService.generateMcqsFromImage(
+            prompt,
+            fileData.b64,
+            fileData.mime,
+            batchSize,
+            excludeList
+          );
+        } else {
+          batch = await aiService.generateMcqs(inputText, batchSize, excludeList);
+        }
+
+        let addedInPass = 0;
+        for (const item of batch || []) {
+          const qText = String(item?.question ?? '').trim();
+          const key = qText.toLowerCase();
+          if (!qText || seen.has(key)) continue;
+          seen.add(key);
+          collected.push(item);
+          excludeList.push(qText);
+          addedInPass++;
+          if (collected.length >= targetCount) break;
+        }
+        pass++;
+        if (addedInPass === 0 && (!batch || batch.length === 0)) break;
       }
 
-      if (result && result.length > 0) {
-        setMcqs(result);
+      const finalResult = collected.slice(0, targetCount);
+
+      if (finalResult.length > 0) {
+        setMcqs(finalResult);
         setUserAnswers({});
         setShowResults(false);
         setCurrentIdx(0);
@@ -358,6 +410,64 @@ export default function MCQProvider() {
               />
             )}
 
+            {/* Custom Question Limit Selector (1-100) */}
+            <div className="mb-6 p-5 rounded-2xl border-2 border-border bg-muted/20 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="font-bold text-sm text-foreground">Number of MCQs to Generate</p>
+                  <p className="text-[11px] text-muted-foreground">
+                    Choose a preset or enter any custom limit from 1 to 100 questions.
+                  </p>
+                </div>
+                <span className="px-3 py-1 rounded-xl bg-primary/10 text-primary text-xs font-black tabular-nums">
+                  {mcqCount} MCQs
+                </span>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {[5, 10, 25, 50, 100].map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => applyMcqCount(preset)}
+                    className={cn(
+                      "px-4 py-2 rounded-xl text-xs font-black transition-all border tabular-nums",
+                      mcqCount === preset
+                        ? "bg-primary text-primary-foreground border-primary shadow-md"
+                        : "bg-card text-foreground border-border hover:border-primary/50"
+                    )}
+                  >
+                    {preset} MCQs
+                  </button>
+                ))}
+                <div className="flex items-center gap-2 ml-auto">
+                  <label htmlFor="custom-mcq-limit" className="text-xs font-semibold text-muted-foreground">
+                    Custom:
+                  </label>
+                  <input
+                    id="custom-mcq-limit"
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={customCountInput}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      setCustomCountInput(raw);
+                      const num = Number(raw);
+                      if (Number.isFinite(num) && num >= 1 && num <= 100) {
+                        setMcqCount(Math.round(num));
+                      }
+                    }}
+                    onBlur={() => {
+                      const num = Number(customCountInput);
+                      applyMcqCount(Number.isFinite(num) && num >= 1 ? num : mcqCount);
+                    }}
+                    className="w-24 px-3 py-2 rounded-xl bg-background border border-border text-sm font-bold text-center tabular-nums focus:outline-none focus:border-primary"
+                  />
+                </div>
+              </div>
+            </div>
+
             <div className="flex items-center gap-4 mb-8">
                <button 
                  onClick={() => setIsExamMode(!isExamMode)}
@@ -402,7 +512,7 @@ export default function MCQProvider() {
               className="w-full py-6 bg-primary text-primary-foreground rounded-[2rem] font-bold text-lg flex items-center justify-center gap-4 hover:shadow-2xl shadow-primary/30 transition-all disabled:opacity-50 group"
             >
               {loading ? <Loader2 className="animate-spin" /> : <Sparkles size={24} className="group-hover:rotate-12 transition-transform" />}
-              <span>{loading ? loadingMessage : 'Engineer Intelligence Check'}</span>
+              <span>{loading ? loadingMessage : `Generate ${mcqCount} MCQs`}</span>
             </button>
           </div>
         </motion.div>

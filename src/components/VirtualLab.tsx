@@ -36,6 +36,7 @@ import {
 } from "lucide-react";
 import PeriodicTable from "./PeriodicTable";
 import LivingAnatomyLab from "./LivingAnatomyLab";
+import ExperimentCountdownTimer from "./ExperimentCountdownTimer";
 import {
   CATEGORY_META,
   ORGANISMS,
@@ -1685,8 +1686,22 @@ export default function VirtualLab({
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -12 }}
-            className="w-full"
+            className="w-full space-y-4"
           >
+            {subject === "biology" && (
+              <ExperimentCountdownTimer
+                subject="biology"
+                onLogTimedSession={
+                  user?.uid
+                    ? (secs) =>
+                        handleSaveCurrentLabResult(
+                          "Biology 3D Anatomy Lab Session",
+                          `Completed ${Math.max(1, Math.round(secs / 60))} min 3D anatomy & biology lab session.`
+                        )
+                    : undefined
+                }
+              />
+            )}
             <LivingAnatomyLab
               embedded
               initialOrganism={selectedAnatomy}
@@ -2130,9 +2145,38 @@ export default function VirtualLab({
 
             {/* Main Workspace */}
             <div className={cn(
-              "flex-1 bg-[#020617] relative flex flex-col items-center justify-center overflow-hidden",
-              subject === "biology" && activeTool === "anatomy_mapper" ? "p-4 sm:p-6" : "p-6 sm:p-12"
+              "flex-1 bg-[#020617] relative flex flex-col items-center justify-between overflow-hidden",
+              subject === "biology" && activeTool === "anatomy_mapper" ? "p-4 sm:p-6" : "p-6 sm:p-10"
             )}>
+              {(subject === "biology" || subject === "chemistry") && (
+                <div className="relative z-20 w-full mb-4">
+                  <ExperimentCountdownTimer
+                    subject={subject}
+                    onLogTimedSession={
+                      user?.uid
+                        ? (secs) =>
+                            handleSaveCurrentLabResult(
+                              `${subject === "biology" ? "Biology" : "Chemistry"} Timed Lab Session`,
+                              `Completed ${Math.max(1, Math.round(secs / 60))} min timed ${subject} experiment.`
+                            )
+                        : undefined
+                    }
+                  />
+                  {labFeedback && (
+                    <p
+                      className={cn(
+                        "mt-2 text-xs font-bold px-3 py-1.5 rounded-xl border inline-block",
+                        labFeedback.type === "success"
+                          ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+                          : "bg-red-500/10 border-red-500/30 text-red-300"
+                      )}
+                    >
+                      {labFeedback.text}
+                    </p>
+                  )}
+                </div>
+              )}
+              <div className="relative z-10 flex-1 w-full flex flex-col items-center justify-center">
               {/* Futuristic Background Decor */}
               <div className="absolute inset-0 opacity-20 pointer-events-none">
                 <div className="absolute top-0 left-0 w-full h-full bg-[radial-gradient(circle_at_50%_50%,#1e293b_0%,transparent_100%)]" />
@@ -3726,6 +3770,7 @@ export default function VirtualLab({
                     </div>
                   )}
                 </AnimatePresence>
+              </div>
               </div>
             </div>
           </motion.div>

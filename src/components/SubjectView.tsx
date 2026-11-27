@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { Video, Book as BookIcon, Binary, Atom, Dna, Beaker, Box, ChevronRight, PlayCircle, Download } from 'lucide-react';
 import { dbService } from '../services/db';
@@ -12,7 +12,6 @@ import { OrganismId } from '../data/livingAnatomyData';
 
 export default function SubjectView() {
   const { id } = useParams<{ id: string }>();
-  const navigate = useNavigate();
   const { user } = useAuth();
   const [materials, setMaterials] = useState<Material[]>([]);
   const [selectedMaterial, setSelectedMaterial] = useState<Material | null>(null);
@@ -115,13 +114,6 @@ export default function SubjectView() {
               className="px-3.5 py-1.5 rounded-xl bg-green-600 text-white hover:bg-green-500 text-xs font-bold transition-all"
             >
               Open All 103 in 3D
-            </button>
-            <button
-              type="button"
-              onClick={() => navigate(`/anatomy-3d?organism=${biologyOrganism}`)}
-              className="px-3.5 py-1.5 rounded-xl border border-primary/40 bg-primary/10 text-primary hover:bg-primary hover:text-primary-foreground text-xs font-bold transition-all"
-            >
-              Full Screen 3D
             </button>
           </div>
         </div>

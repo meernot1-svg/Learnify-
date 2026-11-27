@@ -18,8 +18,7 @@ import {
   Sun,
   Moon,
   Zap,
-  LogOut,
-  Box
+  LogOut
 } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { useTheme } from '../hooks/useTheme';
@@ -53,7 +52,6 @@ export default function MobileNavigation() {
 
   const secondaryItems = [
     { to: '/predictor', icon: FileCheck, label: 'Paper Predictor' },
-    { to: '/anatomy-3d', icon: Box, label: '3D Anatomy Lab' },
   ];
 
   const subjectItems = [

@@ -203,21 +203,6 @@ const staticRoutes = [
     priority: "0.9"
   },
   {
-    path: "anatomy-3d",
-    title: "3D Living Anatomy Lab - 103 Interactive Biology Models | Learnify",
-    description: "Explore 103 interactive 3D anatomy models of the human body, specialized organs, mammals, birds, reptiles, marine life, insects, plants, and cells inside Learnify's Biology Lab.",
-    h1: "3D Living Anatomy Lab & Biology Dissection Simulator",
-    body: `
-      <div class="max-w-4xl mx-auto py-12 px-4">
-        <h1 class="text-3xl sm:text-5xl font-black uppercase tracking-tight text-foreground mb-6">3D Living <span class="text-[#f4b400]">Anatomy Lab</span></h1>
-        <p class="text-lg text-muted-foreground leading-relaxed mb-6">
-          Inspect 103 interactive 3D anatomical models of human organs, animals, plants, insects, marine organisms, and microorganisms with clickable parts, X-ray cutaway views, and exploded layers.
-        </p>
-      </div>
-    `,
-    priority: "0.9"
-  },
-  {
     path: "stem-mentoring",
     title: "STEM Peer Mentoring & Academic Network | Learnify",
     description: "Connect with verified mentors and peer study groups for chemistry, physics, biology, and computer science on Learnify.",

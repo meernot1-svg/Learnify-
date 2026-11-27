@@ -33,7 +33,14 @@ import type {
 const READ_TIMEOUT = 8000;
 const WRITE_TIMEOUT = 8000;
 const VALID_ID_REGEX = /^[a-zA-Z0-9_-]{1,128}$/;
-const VALID_LAB_SUBJECTS: readonly LabSubject[] = ['chemistry', 'physics', 'biology'];
+const VALID_LAB_SUBJECTS: readonly LabSubject[] = [
+  'chemistry',
+  'physics',
+  'biology',
+  'computer',
+  'math',
+  'electrical',
+];
 
 /**
  * Initializes the Firebase app (reusing any existing default app instance)
@@ -307,7 +314,7 @@ export const learningDataService = {
     const path = `labResults/${resultId}`;
 
     if (!VALID_LAB_SUBJECTS.includes(input.subject)) {
-      throw new Error('Lab subject must be chemistry, physics, or biology.');
+      throw new Error('Invalid lab subject selected.');
     }
 
     const experimentTitle =

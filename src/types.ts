@@ -1,5 +1,5 @@
 export type UserRole = 'Mentor' | 'Student';
-export type Subject = 'computer' | 'physics' | 'biology' | 'chemistry';
+export type Subject = 'computer' | 'physics' | 'biology' | 'chemistry' | 'math' | 'electrical';
 export type MaterialType = 'video' | 'book' | 'pdf';
 
 export interface UserProfile {
@@ -59,7 +59,7 @@ export interface StudyReminder {
   createdAt: any;
 }
 
-export type LabSubject = 'chemistry' | 'physics' | 'biology';
+export type LabSubject = 'chemistry' | 'physics' | 'biology' | 'computer' | 'math' | 'electrical';
 
 export interface QuizQuestionItem {
   question: string;

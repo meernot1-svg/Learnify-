@@ -77,6 +77,7 @@ export default function LivingAnatomyLab({
   const [catalogOpen, setCatalogOpen] = useState<boolean>(false);
   const [catalogSearch, setCatalogSearch] = useState<string>('');
   const [catalogCategory, setCatalogCategory] = useState<OrganismCategory | 'all'>('all');
+  const [humanSystemFilter, setHumanSystemFilter] = useState<string>('all');
   const [webglError, setWebglError] = useState<string | null>(null);
 
   const canvasMountRef = useRef<HTMLDivElement>(null);
@@ -580,6 +581,7 @@ export default function LivingAnatomyLab({
     setSelectedPartId(defaultPart);
     setHoveredPartId(null);
     setShowFacts(false);
+    setHumanSystemFilter('all');
     sceneApiRef.current?.loadOrganism(nextId);
   };
 
@@ -947,9 +949,55 @@ export default function LivingAnatomyLab({
               </p>
             )}
 
+            {/* Human Body Systems Filter (StudyFi Body Lab parity) */}
+            {organismId === 'human' && (
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+                {[
+                  { id: 'all', label: 'Whole Body' },
+                  { id: 'Nervous', label: 'Nervous' },
+                  { id: 'Circulatory', label: 'Circulatory' },
+                  { id: 'Respiratory', label: 'Respiratory' },
+                  { id: 'Digestive', label: 'Digestive' },
+                  { id: 'Urinary', label: 'Urinary' },
+                  { id: 'Skeletal', label: 'Skeletal' },
+                  { id: 'Integumentary', label: 'Muscular & Skin' },
+                ].map((sys) => {
+                  const active = humanSystemFilter === sys.id;
+                  return (
+                    <button
+                      key={sys.id}
+                      type="button"
+                      onClick={() => {
+                        setHumanSystemFilter(sys.id);
+                        if (sys.id !== 'all') {
+                          const match = activeOrganism.parts.find((p) =>
+                            p.system.toLowerCase().includes(sys.id.toLowerCase())
+                          );
+                          if (match) handleSelectPart(match.id, true);
+                        }
+                      }}
+                      className={cn(
+                        'px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 border',
+                        active
+                          ? 'bg-emerald-500 text-slate-950 border-emerald-400'
+                          : 'bg-white/5 text-slate-300 border-white/10 hover:text-white hover:bg-white/10'
+                      )}
+                    >
+                      {sys.label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
             {/* Body Parts Quick-Select Bar */}
             <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
-              {activeOrganism.parts.map((part) => {
+              {(organismId === 'human' && humanSystemFilter !== 'all'
+                ? activeOrganism.parts.filter((p) =>
+                    p.system.toLowerCase().includes(humanSystemFilter.toLowerCase())
+                  )
+                : activeOrganism.parts
+              ).map((part) => {
                 const isSelected = part.id === selectedPartId;
                 return (
                   <button

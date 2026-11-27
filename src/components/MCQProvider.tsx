@@ -904,6 +904,8 @@ export default function MCQProvider() {
                           <option value="physics">Physics</option>
                           <option value="biology">Biology</option>
                           <option value="computer">Computer</option>
+                          <option value="math">Mathematics</option>
+                          <option value="electrical">Electrical Eng.</option>
                         </select>
                       </div>
                       <input

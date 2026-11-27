@@ -1237,6 +1237,8 @@ function AdminPublishModal({
               <option value="physics">Physics</option>
               <option value="biology">Biology</option>
               <option value="chemistry">Chemistry</option>
+              <option value="math">Mathematics</option>
+              <option value="electrical">Electrical Engineering</option>
             </select>
           </div>
 

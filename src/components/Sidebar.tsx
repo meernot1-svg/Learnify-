@@ -10,7 +10,9 @@ import {
   Dna, 
   Beaker,
   FileQuestion,
-  GraduationCap
+  GraduationCap,
+  Calculator,
+  Cpu
 } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { clsx, type ClassValue } from 'clsx';
@@ -36,6 +38,8 @@ export default function Sidebar() {
     { id: 'physics', icon: Atom, label: 'Physics' },
     { id: 'biology', icon: Dna, label: 'Biology' },
     { id: 'chemistry', icon: Beaker, label: 'Chemistry' },
+    { id: 'math', icon: Calculator, label: 'Mathematics' },
+    { id: 'electrical', icon: Cpu, label: 'Electrical Eng.' },
   ];
 
   return (

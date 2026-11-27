@@ -78,6 +78,28 @@ const defaultMaterials: Material[] = [
     createdAt: { seconds: Math.floor(Date.now() / 1000) - 40000, nanoseconds: 0 },
     isPrioritized: true,
   },
+  {
+    id: 'mat_calculus_visualized',
+    title: 'Essence of Calculus & Derivatives',
+    description: 'Visual intuition behind limits, instantaneous rates of change, Riemann sums, and the Fundamental Theorem of Calculus.',
+    subject: 'math',
+    type: 'video',
+    url: 'https://www.youtube.com/embed/WUvTyaaNkzM',
+    mentorId: 'mentor_ada',
+    createdAt: { seconds: Math.floor(Date.now() / 1000) - 30000, nanoseconds: 0 },
+    isPrioritized: true,
+  },
+  {
+    id: 'mat_circuit_analysis',
+    title: 'DC Circuits, Ohm Law & Logic Gates',
+    description: 'Hands-on foundation in Kirchhoff voltage and current laws, RC time constants, AC signals, and Boolean digital logic.',
+    subject: 'electrical',
+    type: 'video',
+    url: 'https://www.youtube.com/embed/mc979OhitAg',
+    mentorId: 'mentor_tesla',
+    createdAt: { seconds: Math.floor(Date.now() / 1000) - 20000, nanoseconds: 0 },
+    isPrioritized: true,
+  },
 ];
 
 function getLocalList<T>(key: string, defaults: T[] = []): T[] {

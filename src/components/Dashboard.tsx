@@ -1085,6 +1085,8 @@ function UploadModal({ onClose, onSuccess }: { onClose: () => void; onSuccess?: 
                       <option value="chemistry">Chemistry</option>
                       <option value="biology">Biology</option>
                       <option value="computer">Computer Science</option>
+                      <option value="math">Mathematics</option>
+                      <option value="electrical">Electrical Engineering</option>
                     </select>
                     <ChevronRight size={16} className="absolute right-5 top-5 rotate-90 pointer-events-none text-muted-foreground" />
                   </div>

@@ -18,7 +18,9 @@ import {
   Sun,
   Moon,
   Zap,
-  LogOut
+  LogOut,
+  Calculator,
+  Cpu
 } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { useTheme } from '../hooks/useTheme';
@@ -59,6 +61,8 @@ export default function MobileNavigation() {
     { id: 'physics', icon: Atom, label: 'Physics' },
     { id: 'biology', icon: Dna, label: 'Biology' },
     { id: 'chemistry', icon: Beaker, label: 'Chemistry' },
+    { id: 'math', icon: Calculator, label: 'Mathematics' },
+    { id: 'electrical', icon: Cpu, label: 'Electrical Engineering' },
   ];
 
   const themeOptions: { id: 'light' | 'dark' | 'midnight'; icon: React.ReactNode; label: string }[] = [

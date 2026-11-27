@@ -88,7 +88,7 @@ export default function StudyReminders({ onClose }: StudyRemindersProps) {
     }
   };
 
-  const subjects: Subject[] = ['computer', 'physics', 'biology', 'chemistry'];
+  const subjects: Subject[] = ['computer', 'physics', 'biology', 'chemistry', 'math', 'electrical'];
 
   return (
     <div className="space-y-6 p-1">

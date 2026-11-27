@@ -104,7 +104,7 @@ service cloud.firestore {
                data.id is string && data.id == materialId && isValidId(data.id) &&
                data.title is string && data.title.size() >= 1 && data.title.size() <= 100 &&
                data.description is string && data.description.size() <= 1000 &&
-               data.subject in ['computer', 'physics', 'biology', 'chemistry'] &&
+               data.subject in ['computer', 'physics', 'biology', 'chemistry', 'math', 'electrical'] &&
                data.type in ['video', 'book', 'pdf'] &&
                data.url is string && data.url.size() >= 1 && data.url.size() <= 1000 &&
                data.url.matches('^https?://.*') &&
@@ -114,7 +114,7 @@ service cloud.firestore {
       }
 
       allow get: if isSignedIn() && isValidId(materialId);
-      allow list: if isSignedIn() && resource.data.subject in ['computer', 'physics', 'biology', 'chemistry'];
+      allow list: if isSignedIn() && resource.data.subject in ['computer', 'physics', 'biology', 'chemistry', 'math', 'electrical'];
       allow create: if isEmailVerified() && isValidId(materialId) && isValidMaterial(incoming()) &&
                       incoming().mentorId == request.auth.uid &&
                       incoming().createdAt == request.time &&
@@ -137,7 +137,7 @@ service cloud.firestore {
                data.id is string && data.id == courseId && isValidId(data.id) &&
                data.title is string && data.title.size() >= 1 && data.title.size() <= 100 &&
                data.description is string && data.description.size() <= 1000 &&
-               data.subject in ['computer', 'physics', 'biology', 'chemistry'] &&
+               data.subject in ['computer', 'physics', 'biology', 'chemistry', 'math', 'electrical'] &&
                data.mentorId is string && isValidId(data.mentorId) &&
                data.materialIds is list && data.materialIds.size() <= 50 &&
                (data.materialIds.size() == 0 || data.materialIds[0] is string) &&
@@ -146,7 +146,7 @@ service cloud.firestore {
       }
 
       allow get: if isSignedIn() && isValidId(courseId);
-      allow list: if isSignedIn() && resource.data.subject in ['computer', 'physics', 'biology', 'chemistry'];
+      allow list: if isSignedIn() && resource.data.subject in ['computer', 'physics', 'biology', 'chemistry', 'math', 'electrical'];
       allow create: if isEmailVerified() && isValidId(courseId) && isValidCourse(incoming()) &&
                       incoming().mentorId == request.auth.uid &&
                       incoming().createdAt == request.time &&
@@ -261,7 +261,7 @@ service cloud.firestore {
                data.id is string && data.id == resultId && isValidId(data.id) &&
                data.userId is string && isValidId(data.userId) &&
                data.experimentTitle is string && data.experimentTitle.size() >= 1 && data.experimentTitle.size() <= 120 &&
-               data.subject in ['chemistry', 'physics', 'biology'] &&
+               data.subject in ['chemistry', 'physics', 'biology', 'computer', 'math', 'electrical'] &&
                data.outcome is string && data.outcome.size() >= 1 && data.outcome.size() <= 1000 &&
                data.formula is string && data.formula.size() <= 200 &&
                data.measurements is string && data.measurements.size() <= 1000 &&

@@ -7,9 +7,11 @@ import {
   Bell,
   Binary,
   BookOpen,
+  Calculator,
   CheckCircle2,
   ChevronRight,
   Clock,
+  Cpu,
   Dna,
   Download,
   ExternalLink,
@@ -141,9 +143,25 @@ const SUBJECT_META: Record<
     accentText: 'text-amber-600 dark:text-amber-400',
     barColor: 'bg-amber-500',
   },
+  math: {
+    label: 'Mathematics',
+    shortLabel: 'Math',
+    subtitle: 'Calculus, 3D geometry & probability',
+    icon: Calculator,
+    accentText: 'text-rose-600 dark:text-rose-400',
+    barColor: 'bg-rose-500',
+  },
+  electrical: {
+    label: 'Electrical Eng.',
+    shortLabel: 'Electrical',
+    subtitle: 'Circuits, oscilloscope & logic gates',
+    icon: Cpu,
+    accentText: 'text-cyan-600 dark:text-cyan-400',
+    barColor: 'bg-cyan-500',
+  },
 };
 
-const SUBJECT_ORDER: Subject[] = ['computer', 'physics', 'biology', 'chemistry'];
+const SUBJECT_ORDER: Subject[] = ['computer', 'physics', 'biology', 'chemistry', 'math', 'electrical'];
 
 export default function StudentDashboard() {
   const { profile, user, refreshProfile } = useAuth();
@@ -617,60 +635,42 @@ export default function StudentDashboard() {
   }, [savedQuizzes]);
 
   const labAndQuizTracker = useMemo(() => {
-    const labSubjects: Array<{ key: 'chemistry' | 'biology' | 'physics'; label: string; route: string }> = [
+    const labSubjects: Array<{ key: Subject; label: string; route: string }> = [
       { key: 'chemistry', label: 'Chemistry', route: '/subject/chemistry' },
       { key: 'biology', label: 'Biology', route: '/subject/biology' },
       { key: 'physics', label: 'Physics', route: '/subject/physics' },
+      { key: 'computer', label: 'CS', route: '/subject/computer' },
+      { key: 'math', label: 'Math', route: '/subject/math' },
+      { key: 'electrical', label: 'Electrical', route: '/subject/electrical' },
     ];
 
-    const bySubject = [
-      ...labSubjects.map((s) => {
-        const labsDone = labResults.filter((l) => l.subject === s.key).length;
-        const subjectQuizzes = savedQuizzes.filter((q) => q.subject === s.key);
-        const avgQuiz =
-          subjectQuizzes.length > 0
-            ? Math.round(
-                subjectQuizzes.reduce(
-                  (acc, q) => acc + (q.score / Math.max(1, q.totalQuestions)) * 100,
-                  0
-                ) / subjectQuizzes.length
-              )
-            : 0;
-        const labPct = Math.min(100, Math.round((labsDone / 5) * 100));
-        return {
-          name: s.label,
-          key: s.key,
-          route: s.route,
-          labsCompleted: labsDone,
-          quizzesCompleted: subjectQuizzes.length,
-          labCompletionPct: labPct,
-          quizMasteryPct: avgQuiz,
-        };
-      }),
-      (() => {
-        const csGeneralQuizzes = savedQuizzes.filter(
-          (q) => q.subject === 'computer' || q.subject === 'general' || !['chemistry', 'biology', 'physics'].includes(q.subject)
-        );
-        const avgQuiz =
-          csGeneralQuizzes.length > 0
-            ? Math.round(
-                csGeneralQuizzes.reduce(
-                  (acc, q) => acc + (q.score / Math.max(1, q.totalQuestions)) * 100,
-                  0
-                ) / csGeneralQuizzes.length
-              )
-            : 0;
-        return {
-          name: 'CS & General',
-          key: 'computer',
-          route: '/mcqs',
-          labsCompleted: 0,
-          quizzesCompleted: csGeneralQuizzes.length,
-          labCompletionPct: 0,
-          quizMasteryPct: avgQuiz,
-        };
-      })(),
-    ];
+    const bySubject = labSubjects.map((s) => {
+      const labsDone = labResults.filter((l) => l.subject === s.key).length;
+      const subjectQuizzes = savedQuizzes.filter((q) =>
+        s.key === 'computer'
+          ? q.subject === 'computer' || q.subject === 'general' || !['chemistry', 'biology', 'physics', 'math', 'electrical'].includes(q.subject)
+          : q.subject === s.key
+      );
+      const avgQuiz =
+        subjectQuizzes.length > 0
+          ? Math.round(
+              subjectQuizzes.reduce(
+                (acc, q) => acc + (q.score / Math.max(1, q.totalQuestions)) * 100,
+                0
+              ) / subjectQuizzes.length
+            )
+          : 0;
+      const labPct = Math.min(100, Math.round((labsDone / 5) * 100));
+      return {
+        name: s.label,
+        key: s.key,
+        route: s.route,
+        labsCompleted: labsDone,
+        quizzesCompleted: subjectQuizzes.length,
+        labCompletionPct: labPct,
+        quizMasteryPct: avgQuiz,
+      };
+    });
 
     const recentQuizzes = savedQuizzes.slice(0, 8).map((q) => {
       const pct = Math.round((q.score / Math.max(1, q.totalQuestions)) * 100);
@@ -894,7 +894,7 @@ export default function StudentDashboard() {
           </span>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {SUBJECT_ORDER.map((subj) => {
             const meta = SUBJECT_META[subj];
             const Icon = meta.icon;

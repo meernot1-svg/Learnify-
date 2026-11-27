@@ -9,6 +9,7 @@ import {
   Atom, 
   Dna, 
   Beaker,
+  Box,
   FileQuestion,
   GraduationCap
 } from 'lucide-react';
@@ -29,6 +30,7 @@ export default function Sidebar() {
     { to: '/mcqs', icon: FileQuestion, label: 'MCQs Provider' },
     { to: '/explainer', icon: ImageIcon, label: 'AI Explainer' },
     { to: '/predictor', icon: FileCheck, label: 'Paper Predictor' },
+    { to: '/anatomy-3d', icon: Box, label: '3D Anatomy Lab' },
   ];
 
   const subjectItems = [

@@ -20,6 +20,7 @@ import Explainer from './components/Explainer';
 import PaperPredictor from './components/PaperPredictor';
 import MobileNavigation from './components/MobileNavigation';
 import AdminPanel from './components/AdminPanel';
+import LivingAnatomyLab from './components/LivingAnatomyLab';
 
 // SEO and Public Pages
 import FreeQuizMaker from './components/seo-pages/FreeQuizMaker';
@@ -79,6 +80,7 @@ function AppRoutes() {
         <Route path="/login" element={<PageWrapper><Login /></PageWrapper>} />
         <Route path="/registration" element={<PageWrapper><Registration /></PageWrapper>} />
         <Route path="/admin" element={<PageWrapper><AdminPanel /></PageWrapper>} />
+        <Route path="/anatomy-3d" element={<PageWrapper><LivingAnatomyLab /></PageWrapper>} />
         
         <Route path="/dashboard" element={
           <ProtectedRoute>

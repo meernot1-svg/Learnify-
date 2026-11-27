@@ -1,20 +1,24 @@
 import React, { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import { Video, Book as BookIcon, Binary, Atom, Dna, Beaker, ChevronRight, PlayCircle, Download } from 'lucide-react';
+import { Video, Book as BookIcon, Binary, Atom, Dna, Beaker, Box, ChevronRight, PlayCircle, Download } from 'lucide-react';
 import { dbService } from '../services/db';
 import { useAuth } from '../hooks/useAuth';
 import { Material, Subject } from '../types';
 import { MaterialViewer } from './Dashboard';
 import PythonIDE from './PythonIDE';
 import VirtualLab from './VirtualLab';
+import { OrganismId } from '../data/livingAnatomyData';
 
 export default function SubjectView() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const { user } = useAuth();
   const [materials, setMaterials] = useState<Material[]>([]);
   const [selectedMaterial, setSelectedMaterial] = useState<Material | null>(null);
   const [activeTab, setActiveTab] = useState<'content' | 'tool'>('content');
+  const [biologyLabMode, setBiologyLabMode] = useState<'lab' | 'anatomy'>('lab');
+  const [biologyOrganism, setBiologyOrganism] = useState<OrganismId>('human');
 
   useEffect(() => {
     if (id) {
@@ -61,6 +65,53 @@ export default function SubjectView() {
           </button>
         </div>
       </header>
+
+      {id === 'biology' && (
+        <div className="bg-card border border-border rounded-3xl p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-5 shadow-sm">
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-green-600 dark:text-green-400">
+              <Box size={15} />
+              <span>Interactive 3D Models &amp; Organ Functionality</span>
+            </div>
+            <h2 className="text-xl font-bold tracking-tight">
+              3D Human Body &amp; Living Organisms Lab
+            </h2>
+            <p className="text-sm text-muted-foreground max-w-2xl">
+              Inspect 3D anatomical models of the Human Body, Honeybee, Flowering Plant, and Bony Fish. Click any body part to view its name, biological system, and detailed functionality, or toggle X-Ray and Exploded View.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {(
+              [
+                { org: 'human', label: 'Human Body' },
+                { org: 'bee', label: 'Honeybee' },
+                { org: 'plant', label: 'Flowering Plant' },
+                { org: 'fish', label: 'Bony Fish' },
+              ] as { org: OrganismId; label: string }[]
+            ).map((item) => (
+              <button
+                key={item.org}
+                type="button"
+                onClick={() => {
+                  setBiologyOrganism(item.org);
+                  setBiologyLabMode('anatomy');
+                  setActiveTab('tool');
+                }}
+                className="px-3.5 py-2 rounded-xl border border-border bg-muted/50 hover:bg-primary hover:text-primary-foreground hover:border-primary text-xs font-bold transition-all"
+              >
+                {item.label}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => navigate(`/anatomy-3d?organism=${biologyOrganism}`)}
+              className="px-3.5 py-2 rounded-xl border border-primary/40 bg-primary/10 text-primary hover:bg-primary hover:text-primary-foreground text-xs font-bold transition-all"
+            >
+              Full Screen 3D
+            </button>
+          </div>
+        </div>
+      )}
 
       <AnimatePresence mode="wait">
         {activeTab === 'content' ? (
@@ -125,7 +176,14 @@ export default function SubjectView() {
             {id === 'computer' && <PythonIDE />}
             {id === 'chemistry' && <VirtualLab initialSubject="chemistry" hideSwitcher />}
             {id === 'physics' && <VirtualLab initialSubject="physics" hideSwitcher />}
-            {id === 'biology' && <VirtualLab initialSubject="biology" hideSwitcher />}
+            {id === 'biology' && (
+              <VirtualLab
+                initialSubject="biology"
+                hideSwitcher
+                initialViewMode={biologyLabMode}
+                initialOrganism={biologyOrganism}
+              />
+            )}
           </motion.div>
         )}
       </AnimatePresence>

@@ -122,6 +122,12 @@ export default function LandingPage() {
                 <span className="relative z-10">Initialize Journey</span>
               </button>
               <button
+                onClick={() => navigate('/anatomy-3d')}
+                className="w-full sm:w-auto px-8 sm:px-10 py-5 sm:py-6 rounded-2xl border-2 border-primary/50 bg-primary/10 text-foreground font-black text-sm sm:text-base uppercase tracking-widest hover:bg-primary hover:text-primary-foreground transition-all"
+              >
+                3D Anatomy Lab
+              </button>
+              <button
                 onClick={() => navigate('/about-us')}
                 className="w-full sm:w-auto px-10 sm:px-12 py-5 sm:py-6 rounded-2xl border-2 border-border font-black text-sm sm:text-base uppercase tracking-widest hover:bg-muted transition-all"
               >

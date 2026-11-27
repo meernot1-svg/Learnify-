@@ -31,9 +31,17 @@ import {
   Save,
   Trash2,
   Edit3,
-  Loader2
+  Loader2,
+  Box
 } from "lucide-react";
 import PeriodicTable from "./PeriodicTable";
+import LivingAnatomyLab from "./LivingAnatomyLab";
+import {
+  CATEGORY_META,
+  ORGANISMS,
+  OrganismCategory,
+  OrganismId,
+} from "../data/livingAnatomyData";
 import { cn } from "../lib/utils";
 import { ElementData, elements } from "../lib/elementData";
 import { useAuth } from "../hooks/useAuth";
@@ -171,11 +179,25 @@ function MoleculeBall3D({
   );
 }
 
-const ANATOMY_MODELS = [
-  { id: "frog", name: "Amphibian Model", system: "Skeletal System", icon: LayoutGrid },
-  { id: "human", name: "Human Physiology", system: "Integrated Systems", icon: User },
-  { id: "animal", name: "Comparative Zoology", system: "Mammalia Map", icon: LayoutGrid },
-];
+const ANATOMY_MODELS: {
+  id: OrganismId;
+  name: string;
+  scientificName: string;
+  category: string;
+  categoryKey: OrganismCategory;
+  system: string;
+  partsCount: number;
+  icon: typeof User;
+}[] = ORGANISMS.map((org) => ({
+  id: org.id,
+  name: org.name,
+  scientificName: org.scientificName,
+  category: org.category,
+  categoryKey: org.categoryKey,
+  system: `${org.parts.length} Interactive 3D Parts`,
+  partsCount: org.parts.length,
+  icon: org.categoryKey === "human" ? User : org.categoryKey === "plants" ? FlaskRound : LayoutGrid,
+}));
 
 const MOLECULAR_STRUCTURES: Record<
   string,
@@ -362,6 +384,8 @@ function MolecularModel3D({ formula }: { formula: string }) {
 interface VirtualLabProps {
   initialSubject?: Subject;
   hideSwitcher?: boolean;
+  initialViewMode?: ViewMode;
+  initialOrganism?: OrganismId;
 }
 
 // Physical Lab Sub-components
@@ -418,12 +442,14 @@ function ExperimentCard({
 export default function VirtualLab({
   initialSubject,
   hideSwitcher = false,
+  initialViewMode,
+  initialOrganism,
 }: VirtualLabProps) {
   const [subject, setSubject] = useState<Subject>(
     initialSubject || "chemistry",
   );
   const [viewMode, setViewMode] = useState<ViewMode>(
-    subject === "chemistry" ? "periodic" : "lab",
+    initialViewMode ?? (subject === "chemistry" ? "periodic" : "lab"),
   );
 
   // Physics States
@@ -443,8 +469,23 @@ export default function VirtualLab({
   const [saltConcentration, setSaltConcentration] = useState(0);
 
   // Anatomy State
-  const [selectedAnatomy, setSelectedAnatomy] = useState<string | null>(null);
-  const [selectedLayer, setSelectedLayer] = useState<string>("Skin");
+  const [selectedAnatomy, setSelectedAnatomy] = useState<OrganismId>(
+    initialOrganism || "human"
+  );
+  const [anatomySearch, setAnatomySearch] = useState("");
+  const [anatomyCategory, setAnatomyCategory] = useState<OrganismCategory | "all">("all");
+
+  React.useEffect(() => {
+    if (initialViewMode) {
+      setViewMode(initialViewMode);
+    }
+  }, [initialViewMode]);
+
+  React.useEffect(() => {
+    if (initialOrganism) {
+      setSelectedAnatomy(initialOrganism);
+    }
+  }, [initialOrganism]);
 
   const [hoveredItem, setHoveredItem] = useState<string | null>(null);
   const [beaker, setBeaker] = useState<Substance[]>([]);
@@ -1636,289 +1677,16 @@ export default function VirtualLab({
         ) : viewMode === "anatomy" ? (
           <motion.div
             key="anatomy"
-            initial={{ opacity: 0, y: 20 }}
+            initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -20 }}
-            className="bg-card border border-border rounded-[3rem] p-12 text-center shadow-2xl relative overflow-hidden"
+            exit={{ opacity: 0, y: -12 }}
+            className="w-full"
           >
-            <div className="max-w-6xl mx-auto">
-              {selectedAnatomy ? (
-                <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                  <div className="flex items-center justify-between mb-8 pb-6 border-b border-white/10">
-                    <div className="flex items-center gap-6">
-                      <button
-                        onClick={() => setSelectedAnatomy(null)}
-                        className="p-4 bg-white/5 hover:bg-white/10 rounded-3xl border border-white/10 transition-all group"
-                      >
-                        <RotateCcw size={24} className="group-hover:-rotate-90 transition-transform" />
-                      </button>
-                      <div className="text-left">
-                        <div className="flex items-center gap-3 mb-1">
-                           <h2 className="text-4xl font-black italic tracking-tighter uppercase leading-none text-white">
-                            {selectedAnatomy === "frog"
-                              ? "Lithobates catesbeianus"
-                              : selectedAnatomy === "human"
-                                ? "Homo Sapiens"
-                                : "Mammalian Comparative"}
-                          </h2>
-                          <span className="px-3 py-1 rounded-full bg-primary/20 text-primary text-[8px] font-black uppercase tracking-widest border border-primary/30">Lvl 4 Model</span>
-                        </div>
-                        <p className="text-white/40 text-[10px] font-black uppercase tracking-[0.4em]">
-                          High-Resolution Biological Synthesis
-                        </p>
-                      </div>
-                    </div>
-                  <div className="flex gap-4">
-                       <button className="px-6 py-3 bg-white/5 rounded-2xl border border-white/10 text-[10px] font-bold uppercase tracking-widest hover:bg-white/10 transition-all flex items-center gap-2">
-                         <Activity size={14} className="text-primary" />
-                         Toggle Skeletal
-                       </button>
-                       <button className="px-6 py-3 bg-primary text-primary-foreground rounded-2xl font-bold text-[10px] uppercase tracking-widest hover:shadow-lg shadow-primary/20 transition-all flex items-center gap-2">
-                         <Zap size={14} />
-                         View Vital Nodes
-                       </button>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
-                    <div className="lg:col-span-1 space-y-4">
-                        {[
-                         { label: 'Skin', icon: <Layers size={14} /> },
-                         { label: 'Muscle', icon: <Zap size={14} /> },
-                         { label: 'Nerve', icon: <Activity size={14} /> },
-                         { label: 'Bone', icon: <Shield size={14} /> }
-                       ].map((layer) => (
-                         <button 
-                           key={layer.label} 
-                           onClick={() => setSelectedLayer(layer.label)}
-                           className={cn(
-                             "w-full h-24 rounded-2xl border transition-all flex flex-col items-center justify-center gap-2 group",
-                             selectedLayer === layer.label 
-                               ? "bg-primary border-primary text-white shadow-lg" 
-                               : "bg-white/5 border-white/10 text-muted-foreground hover:bg-white/10"
-                           )}
-                         >
-                           <div className={cn("transition-colors", selectedLayer === layer.label ? "text-white" : "text-primary group-hover:text-white")}>
-                             {layer.icon}
-                           </div>
-                           <span className="text-[10px] font-black uppercase [writing-mode:vertical-lr]">{layer.label}</span>
-                         </button>
-                       ))}
-                    </div>
-
-                    <div className="lg:col-span-7 aspect-video bg-black/60 rounded-2xl sm:rounded-[4rem] border border-white/10 relative overflow-hidden group p-4 sm:p-10 flex items-center justify-center">
-                      <div className="absolute inset-0 opacity-20 pointer-events-none">
-                         <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.1)_1px,transparent_1px)] bg-[length:24px_24px]" />
-                      </div>
-                      
-                      <AnimatePresence mode="wait">
-                        <motion.img
-                          key={`${selectedAnatomy}-${selectedLayer}`}
-                          initial={{ scale: 1.2, opacity: 0 }}
-                          animate={{ scale: 1, opacity: 1 }}
-                          exit={{ scale: 0.9, opacity: 0 }}
-                          transition={{ duration: 0.5 }}
-                          referrerPolicy="no-referrer"
-                          src={
-                            selectedAnatomy === "frog"
-                              ? (selectedLayer === "Skin" ? "https://images.pexels.com/photos/70083/frog-macro-amphibian-nature-70083.jpeg?auto=compress" : 
-                                 selectedLayer === "Muscle" ? "https://images.pexels.com/photos/15167144/pexels-photo-15167144.jpeg?auto=compress" :
-                                 "https://images.pexels.com/photos/17267154/pexels-photo-17267154.jpeg?auto=compress")
-                              : selectedAnatomy === "human"
-                                ? (selectedLayer === "Skin" ? "https://images.pexels.com/photos/4033148/pexels-photo-4033148.jpeg?auto=compress" :
-                                   "https://images.pexels.com/photos/4031326/pexels-photo-4031326.jpeg?auto=compress")
-                                : "https://images.pexels.com/photos/15167144/pexels-photo-15167144.jpeg?auto=compress"
-                          }
-                          className="max-h-full max-w-full object-contain rounded-3xl transition-transform duration-[5000ms] group-hover:scale-105"
-                          alt="Anatomy Model"
-                        />
-                      </AnimatePresence>
-                      
-                      {/* Interactive Nodes */}
-                      <div className="absolute inset-0 z-20 overflow-hidden pointer-events-none">
-                         {[
-                           { top: '40%', left: '30%', color: 'bg-red-500', label: 'Vital Center' },
-                           { top: '60%', left: '70%', color: 'bg-blue-500', label: 'Motor Node' },
-                           { top: '20%', left: '50%', color: 'bg-emerald-500', label: 'Optic Core' },
-                         ].map((node, i) => (
-                           <motion.div 
-                             key={i}
-                             initial={{ opacity: 0 }}
-                             animate={{ opacity: 1 }}
-                             className="absolute group/node pointer-events-auto cursor-pointer"
-                             style={{ top: node.top, left: node.left }}
-                           >
-                              <div className={cn("w-4 h-4 rounded-full flex items-center justify-center relative", node.color)}>
-                                 <div className={cn("absolute inset-0 rounded-full animate-ping opacity-75", node.color)} />
-                                 <BrainCircuit size={10} className="text-white relative z-10" />
-                              </div>
-                              <div className="absolute left-full ml-4 top-1/2 -translate-y-1/2 bg-black/60 border border-white/10 backdrop-blur-md px-3 py-1 transparent rounded-lg text-[8px] font-black uppercase tracking-widest text-white whitespace-nowrap opacity-0 group-hover/node:opacity-100 transition-opacity">
-                                 {node.label}
-                              </div>
-                           </motion.div>
-                         ))}
-                      </div>
-
-                      <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent pointer-events-none" />
-                      
-                      <div className="absolute bottom-10 left-10 flex flex-col gap-3">
-                        <div className="flex gap-2">
-                          <div className="px-5 py-2 bg-primary/20 backdrop-blur-xl rounded-2xl border border-primary/30 text-[10px] font-black uppercase text-primary flex items-center gap-2">
-                            <div className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
-                            Target: {selectedAnatomy === 'frog' ? 'Ranidae' : 'Hominid'}
-                          </div>
-                          <div className="px-5 py-2 bg-emerald-500/20 backdrop-blur-xl rounded-2xl border border-emerald-500/30 text-[10px] font-black uppercase text-emerald-500 flex items-center gap-2">
-                            <Activity size={12} className="animate-pulse" />
-                            Status: Active
-                          </div>
-                        </div>
-                        <p className="text-[10px] font-mono text-white/40 uppercase tracking-widest pl-2">Coord: 24.55, -12.04, 18.2</p>
-                      </div>
-
-                      <div className="absolute top-10 right-10 flex flex-col items-end gap-2">
-                         <div className="p-3 bg-white/5 rounded-2xl border border-white/10 backdrop-blur-md">
-                            <Activity className="text-emerald-500 animate-pulse" size={24} />
-                         </div>
-                         <div className="text-[8px] font-black font-mono text-emerald-500/80 uppercase">Vitals Processing</div>
-                      </div>
-                    </div>
-
-                    <div className="lg:col-span-4 text-left space-y-10">
-                      <div className="space-y-6">
-                        <h4 className="text-xs font-black uppercase tracking-widest text-primary flex items-center gap-2">
-                           <div className="w-2 h-2 bg-primary rounded-full" />
-                           Interactive Nodes
-                        </h4>
-                        <div className="space-y-3">
-                          {(selectedAnatomy === "frog"
-                            ? [
-                                "Peripheral Nervous Web",
-                                "Cutaneous Respiration",
-                                "Ventral Cavity Mesh",
-                                "Ocular Reflex Loop",
-                                "Digit Bone Matrix"
-                              ]
-                            : selectedAnatomy === "human"
-                              ? [
-                                  "Limbic System Map",
-                                  "Myocardial Sync",
-                                  "Renal Filtration",
-                                  "Synaptic Pathway",
-                                  "Hepatic Metabolism"
-                                ]
-                              : [
-                                  "Propriocentive Input",
-                                  "Muscular Lever Graph",
-                                  "Basal Metabloic Index",
-                                  "Sensory Decoupling",
-                                  "Cortical Map"
-                                ]
-                          ).map((feat, i) => (
-                            <motion.div
-                              key={i}
-                              whileHover={{ x: 5 }}
-                              className="flex items-center gap-5 p-5 bg-white/5 rounded-[2rem] border border-white/10 hover:border-primary transition-all cursor-pointer group/node"
-                            >
-                              <div className="w-10 h-10 rounded-2xl bg-primary/10 text-primary flex items-center justify-center shrink-0 group-hover/node:bg-primary group-hover/node:text-white transition-colors">
-                                <Zap size={18} />
-                              </div>
-                              <div className="flex flex-col">
-                                <span className="text-[10px] font-black uppercase tracking-widest group-hover/node:text-primary transition-colors">
-                                  {feat}
-                                </span>
-                                <span className="text-[8px] text-white/30 uppercase font-bold tracking-widest">Active Link</span>
-                              </div>
-                              <ChevronRight
-                                size={14}
-                                className="ml-auto text-white/10 group-hover/node:text-primary transition-all"
-                              />
-                            </motion.div>
-                          ))}
-                        </div>
-                      </div>
-
-                      <div className="p-8 bg-gradient-to-br from-primary/10 to-transparent rounded-[3rem] border border-primary/20 relative group overflow-hidden">
-                        <div className="relative z-10">
-                          <h4 className="text-[10px] font-black uppercase tracking-widest text-primary mb-3">AI Diagnostic Summary</h4>
-                          <p className="text-xs font-medium text-white/60 leading-relaxed italic">
-                            "The biological framework of this model is optimized for high-pressure environmental stimuli. Observe the {selectedAnatomy === 'frog' ? 'dual-respiratory' : 'complex cognitive'} pathways for critical survival data."
-                          </p>
-                        </div>
-                        <div className="absolute -bottom-10 -right-10 w-32 h-32 bg-primary/5 rounded-full blur-2xl group-hover:scale-150 transition-transform" />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-8">
-                  <div className="flex items-center gap-4 mb-4">
-                    <button
-                      onClick={() => setViewMode("lab")}
-                      className="px-6 py-2 bg-primary text-primary-foreground rounded-full text-[10px] font-black uppercase tracking-widest shadow-xl shadow-primary/20 hover:scale-105 active:scale-95 transition-all"
-                    >
-                      Exit Archive
-                    </button>
-                  </div>
-                  <h2 className="text-3xl font-black italic mb-2 tracking-tighter uppercase">
-                    Biology Atlas
-                  </h2>
-                  <p className="text-muted-foreground mb-12 text-sm uppercase tracking-[0.2em] font-bold">
-                    3D Comparative Anatomy & Specimens
-                  </p>
-
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                    {[
-                      {
-                        id: "frog",
-                        name: "Frog Dissection",
-                        img: "https://images.pexels.com/photos/70083/frog-macro-amphibian-nature-70083.jpeg?auto=compress",
-                        desc: "Skeletal and organ systems.",
-                      },
-                      {
-                        id: "human",
-                        name: "Human Body",
-                        img: "https://images.pexels.com/photos/4033148/pexels-photo-4033148.jpeg?auto=compress",
-                        desc: "Integrated physiology models.",
-                      },
-                      {
-                        id: "animal",
-                        name: "Mammalian Specimen",
-                        img: "https://images.pexels.com/photos/15167144/pexels-photo-15167144.jpeg?auto=compress",
-                        desc: "Diverse biological structures.",
-                      },
-                    ].map((item, i) => (
-                      <motion.div
-                        key={item.id}
-                        initial={{ opacity: 0, y: 30 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: i * 0.1 }}
-                        onClick={() => setSelectedAnatomy(item.id)}
-                        className="group bg-muted/40 rounded-[2.5rem] p-6 border border-transparent hover:border-primary/50 transition-all cursor-pointer hover:shadow-2xl active:scale-95"
-                      >
-                        <div className="aspect-[4/5] rounded-[2rem] overflow-hidden mb-6 relative">
-                          <img
-                            src={item.img}
-                            referrerPolicy="no-referrer"
-                            className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
-                            alt={item.name}
-                          />
-                          <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" />
-                          <div className="absolute top-4 right-4 bg-primary text-primary-foreground px-4 py-1 rounded-full text-[8px] font-black uppercase">
-                            Premium Model
-                          </div>
-                        </div>
-                        <h4 className="font-black italic text-xl mb-2 tracking-tight group-hover:text-primary transition-colors">
-                          {item.name}
-                        </h4>
-                        <p className="text-muted-foreground text-xs font-medium">
-                          {item.desc}
-                        </p>
-                      </motion.div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
+            <LivingAnatomyLab
+              embedded
+              initialOrganism={selectedAnatomy}
+              onExit={() => setViewMode("lab")}
+            />
           </motion.div>
         ) : viewMode === "lab" ? (
           <motion.div
@@ -3132,39 +2900,98 @@ export default function VirtualLab({
                     className="w-full h-full flex flex-col items-center justify-center z-10 p-10"
                   >
                     {activeTool === "anatomy_mapper" ? (
-                      <div className="w-full max-w-5xl h-full flex flex-col gap-8">
-                        <div className="flex items-center justify-between">
-                          <h3 className="text-3xl font-black tracking-tighter uppercase italic text-white flex items-center gap-4">
-                            <LayoutGrid className="text-emerald-500" />
-                            Anatomy Mapping Suite
-                          </h3>
+                      <div className="w-full max-w-5xl h-full flex flex-col gap-4">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <h3 className="text-xl sm:text-2xl font-black tracking-tighter uppercase italic text-white flex items-center gap-2.5">
+                              <Box className="text-emerald-500" />
+                              3D Anatomy Suite ({ANATOMY_MODELS.length} Models)
+                            </h3>
+                            <p className="text-xs text-slate-400">
+                              Click any organism or human organ to launch interactive 3D dissection &amp; inspection.
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setViewMode("anatomy")}
+                            className="px-4 py-2 rounded-xl bg-emerald-500 text-slate-950 text-xs font-bold uppercase tracking-wider hover:bg-emerald-400 transition-colors shrink-0"
+                          >
+                            Open Interactive 3D Lab
+                          </button>
                         </div>
 
-                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6 flex-1">
-                          {ANATOMY_MODELS.map((model) => (
+                        <div className="flex flex-wrap items-center gap-2.5">
+                          <div className="relative flex-1 min-w-[200px] max-w-sm">
+                            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                            <input
+                              type="text"
+                              value={anatomySearch}
+                              onChange={(e) => setAnatomySearch(e.target.value)}
+                              placeholder="Search 103 3D models (e.g., lion, heart, octopus)..."
+                              className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-900/90 border border-white/10 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-emerald-500"
+                            />
+                          </div>
+                          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 max-w-full">
+                            {CATEGORY_META.map((cat) => {
+                              const count =
+                                cat.id === "all"
+                                  ? ANATOMY_MODELS.length
+                                  : ANATOMY_MODELS.filter((m) => m.categoryKey === cat.id).length;
+                              return (
+                                <button
+                                  key={cat.id}
+                                  type="button"
+                                  onClick={() => setAnatomyCategory(cat.id)}
+                                  className={cn(
+                                    "px-2.5 py-1.5 rounded-lg text-[11px] font-bold whitespace-nowrap shrink-0 transition-colors",
+                                    anatomyCategory === cat.id
+                                      ? "bg-emerald-500 text-slate-950"
+                                      : "bg-slate-900/70 text-slate-300 border border-white/10 hover:text-white"
+                                  )}
+                                >
+                                  {cat.label} ({count})
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5 max-h-[460px] overflow-y-auto pr-1">
+                          {ANATOMY_MODELS.filter((model) => {
+                            if (anatomyCategory !== "all" && model.categoryKey !== anatomyCategory) return false;
+                            const q = anatomySearch.trim().toLowerCase();
+                            if (!q) return true;
+                            return (
+                              model.name.toLowerCase().includes(q) ||
+                              model.scientificName.toLowerCase().includes(q) ||
+                              model.category.toLowerCase().includes(q)
+                            );
+                          }).map((model) => (
                             <motion.button
                               key={model.id}
-                              whileHover={{ scale: 1.02, y: -5 }}
-                              whileTap={{ scale: 0.98 }}
+                              whileHover={{ scale: 1.015, y: -2 }}
+                              whileTap={{ scale: 0.985 }}
                               onClick={() => {
                                 setSelectedAnatomy(model.id);
                                 setViewMode("anatomy");
                               }}
-                              className="p-8 bg-slate-900/40 border border-white/5 rounded-[2.5rem] flex flex-col items-center gap-6 group relative overflow-hidden"
+                              className="p-4 bg-slate-900/60 border border-white/10 rounded-2xl flex items-center gap-3.5 text-left group hover:border-emerald-500/50 transition-colors"
                             >
-                              <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-                              <div className="w-32 h-32 rounded-full bg-slate-900 border-2 border-emerald-500/30 flex items-center justify-center text-emerald-400 group-hover:border-emerald-500 transition-colors shadow-2xl relative">
-                                <model.icon size={64} strokeWidth={1} />
-                                <div className="absolute inset-0 rounded-full bg-emerald-500/20 blur-xl opacity-0 group-hover:opacity-100 transition-opacity" />
+                              <div className="w-12 h-12 rounded-xl bg-slate-900 border border-emerald-500/30 flex items-center justify-center text-emerald-400 group-hover:border-emerald-500 transition-colors shrink-0">
+                                <model.icon size={22} strokeWidth={1.6} />
                               </div>
-                              <div className="text-center relative">
-                                <h4 className="text-xl font-black uppercase tracking-tighter text-white mb-2">
+                              <div className="min-w-0 flex-1">
+                                <h4 className="text-sm font-bold text-white truncate">
                                   {model.name}
                                 </h4>
-                                <p className="text-[10px] font-black uppercase tracking-widest text-emerald-500/60">
-                                  {model.system}
+                                <p className="text-[11px] text-slate-400 italic truncate">
+                                  {model.scientificName}
+                                </p>
+                                <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-400 mt-0.5">
+                                  {model.category} · {model.partsCount} parts
                                 </p>
                               </div>
+                              <ChevronRight size={16} className="text-slate-500 group-hover:text-emerald-400 shrink-0" />
                             </motion.button>
                           ))}
                         </div>

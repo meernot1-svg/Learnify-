@@ -9,10 +9,12 @@ import {
   ChevronRight,
   ChevronUp,
   Eye,
+  EyeOff,
   FileDown,
   Focus,
   Layers,
   LayoutGrid,
+  Microscope,
   Pause,
   Play,
   RotateCcw,
@@ -39,6 +41,81 @@ const _scratchCenter = new THREE.Vector3();
 const _scratchSize = new THREE.Vector3();
 const _highlightColor = new THREE.Color(0x38bdf8);
 const _hoverColor = new THREE.Color(0x1e3a8a);
+
+type LayerPresetId = 'full' | 'muscular' | 'skeletal' | 'organs' | 'neurovascular' | 'custom';
+type CameraViewPreset = 'front' | 'side' | 'back' | 'top';
+
+const HUMAN_SUB_ORGAN_MAP: Record<string, { organismId: OrganismId; label: string }> = {
+  brain: { organismId: 'human_brain', label: 'Brain Detail' },
+  nervous_network: { organismId: 'human_spine', label: 'Spine Detail' },
+  eyes_senses: { organismId: 'human_eye', label: 'Eye Detail' },
+  heart: { organismId: 'human_heart', label: 'Heart Detail' },
+  vascular: { organismId: 'human_blood_cells', label: 'Blood Cells' },
+  lungs: { organismId: 'human_lungs', label: 'Lungs Detail' },
+  stomach: { organismId: 'human_digestive', label: 'Digestive Detail' },
+  intestines: { organismId: 'human_digestive', label: 'Digestive Detail' },
+  kidneys: { organismId: 'human_kidney', label: 'Kidney Detail' },
+  skeleton: { organismId: 'human_skeleton', label: 'Skeleton Detail' },
+  muscles: { organismId: 'human_arm_muscle', label: 'Muscle Detail' },
+  outer_body: { organismId: 'human_skin', label: 'Skin Detail' },
+};
+
+const HUMAN_LAYER_PRESETS: Array<{
+  id: Exclude<LayerPresetId, 'custom'>;
+  label: string;
+  hiddenIds: string[];
+}> = [
+  { id: 'full', label: 'Full Body', hiddenIds: [] },
+  { id: 'muscular', label: 'Muscular', hiddenIds: ['outer_body'] },
+  {
+    id: 'skeletal',
+    label: 'Skeletal',
+    hiddenIds: [
+      'outer_body',
+      'muscles',
+      'brain',
+      'nervous_network',
+      'eyes_senses',
+      'heart',
+      'vascular',
+      'lungs',
+      'liver',
+      'stomach',
+      'intestines',
+      'endocrine_lymph',
+      'kidneys',
+    ],
+  },
+  { id: 'organs', label: 'Organs', hiddenIds: ['outer_body', 'muscles', 'skeleton'] },
+  {
+    id: 'neurovascular',
+    label: 'Vessels & Nerves',
+    hiddenIds: [
+      'outer_body',
+      'muscles',
+      'skeleton',
+      'lungs',
+      'liver',
+      'stomach',
+      'intestines',
+      'endocrine_lymph',
+      'kidneys',
+    ],
+  },
+];
+
+const HUMAN_SYSTEM_FILTERS = [
+  { id: 'all', label: 'All Systems' },
+  { id: 'Nervous', label: 'Nervous' },
+  { id: 'Circulatory', label: 'Circulatory' },
+  { id: 'Respiratory', label: 'Respiratory' },
+  { id: 'Digestive', label: 'Digestive' },
+  { id: 'Urinary', label: 'Urinary' },
+  { id: 'Endocrine', label: 'Endocrine' },
+  { id: 'Skeletal', label: 'Skeletal' },
+  { id: 'Muscular', label: 'Muscular' },
+  { id: 'Integumentary', label: 'Skin' },
+];
 
 export interface LivingAnatomyLabProps {
   embedded?: boolean;
@@ -82,6 +159,10 @@ export default function LivingAnatomyLab({
   const [catalogSearch, setCatalogSearch] = useState<string>('');
   const [catalogCategory, setCatalogCategory] = useState<OrganismCategory | 'all'>('all');
   const [humanSystemFilter, setHumanSystemFilter] = useState<string>('all');
+  const [activeLayerPreset, setActiveLayerPreset] = useState<LayerPresetId>('full');
+  const [hiddenPartIds, setHiddenPartIds] = useState<string[]>([]);
+  const [isolatedPartId, setIsolatedPartId] = useState<string | null>(null);
+  const [partSearch, setPartSearch] = useState<string>('');
   const [webglError, setWebglError] = useState<string | null>(null);
 
   const canvasMountRef = useRef<HTMLDivElement>(null);
@@ -104,6 +185,9 @@ export default function LivingAnatomyLab({
   const autoRotateRef = useRef(autoRotate);
   const selectedPartIdRef = useRef(selectedPartId);
   const hoveredPartIdRef = useRef(hoveredPartId);
+  const hiddenPartIdsRef = useRef(hiddenPartIds);
+  const isolatedPartIdRef = useRef(isolatedPartId);
+  const humanSystemFilterRef = useRef(humanSystemFilter);
 
   explodeTargetRef.current = explodeTarget;
   xrayShellRef.current = xrayShell;
@@ -112,11 +196,15 @@ export default function LivingAnatomyLab({
   autoRotateRef.current = autoRotate;
   selectedPartIdRef.current = selectedPartId;
   hoveredPartIdRef.current = hoveredPartId;
+  hiddenPartIdsRef.current = hiddenPartIds;
+  isolatedPartIdRef.current = isolatedPartId;
+  humanSystemFilterRef.current = humanSystemFilter;
 
   const sceneApiRef = useRef<{
     loadOrganism: (id: OrganismId) => void;
     focusPart: (partId: string) => void;
     resetCamera: (id?: OrganismId) => void;
+    setCameraView: (view: CameraViewPreset) => void;
     applyVisualState: () => void;
     captureSnapshot: () => string | null;
   } | null>(null);
@@ -160,6 +248,25 @@ export default function LivingAnatomyLab({
       );
     });
   }, [catalogCategory, catalogSearch]);
+
+  const filteredDockParts = useMemo(() => {
+    const q = partSearch.trim().toLowerCase();
+    return activeOrganism.parts.filter((p) => {
+      if (
+        organismId === 'human' &&
+        humanSystemFilter !== 'all' &&
+        !p.system.toLowerCase().includes(humanSystemFilter.toLowerCase())
+      ) {
+        return false;
+      }
+      if (!q) return true;
+      return (
+        p.name.toLowerCase().includes(q) ||
+        p.system.toLowerCase().includes(q) ||
+        p.summary.toLowerCase().includes(q)
+      );
+    });
+  }, [activeOrganism.parts, humanSystemFilter, organismId, partSearch]);
 
   const categoryCounts = useMemo(() => {
     const counts: Record<string, number> = { all: ORGANISMS.length };
@@ -285,7 +392,7 @@ export default function LivingAnatomyLab({
     controls.dampingFactor = 0.065;
     controls.minDistance = 1.4;
     controls.maxDistance = 11.5;
-    controls.maxPolarAngle = Math.PI * 0.49;
+    controls.maxPolarAngle = Math.PI * 0.54;
 
     let activeSpecimen: SpecimenBuildResult | null = null;
     let currentOrganismId: OrganismId = resolvedInitialOrganism;
@@ -302,47 +409,104 @@ export default function LivingAnatomyLab({
 
     const maxAniso = renderer.capabilities.getMaxAnisotropy();
 
+    const getPartVisibilityMode = (partId: string): 'hidden' | 'ghosted' | 'visible' => {
+      if (hiddenPartIdsRef.current.includes(partId)) return 'hidden';
+      const isoId = isolatedPartIdRef.current;
+      if (isoId) {
+        return partId === isoId ? 'visible' : 'ghosted';
+      }
+      const sysFilter = humanSystemFilterRef.current;
+      if (currentOrganismId === 'human' && sysFilter !== 'all') {
+        const humanParts = ORGANISMS[0]?.parts ?? [];
+        const pInfo = humanParts.find((p) => p.id === partId);
+        const matches = pInfo?.system.toLowerCase().includes(sysFilter.toLowerCase()) ?? false;
+        if (matches) return 'visible';
+        if (partId === 'outer_body' || partId === 'muscles') return 'hidden';
+        return 'ghosted';
+      }
+      return 'visible';
+    };
+
     const applyVisualState = () => {
       if (!activeSpecimen) return;
       const selId = selectedPartIdRef.current;
       const hovId = hoveredPartIdRef.current;
       const showShell = xrayShellRef.current;
+      const isoId = isolatedPartIdRef.current;
+      const shellSet = new Set(activeSpecimen.shellMeshes);
 
       activeSpecimen.parts.forEach((entry, partId) => {
-        const isSelected = partId === selId;
-        const isHovered = partId === hovId && !isSelected;
+        const mode = getPartVisibilityMode(partId);
+        if (mode === 'hidden') {
+          entry.group.visible = false;
+          return;
+        }
+        entry.group.visible = true;
+
+        const isSelected = partId === selId && mode === 'visible';
+        const isHovered = partId === hovId && !isSelected && mode === 'visible';
 
         entry.meshes.forEach((mesh) => {
           const mat = mesh.material as THREE.MeshStandardMaterial;
-          if (!mat || !mat.emissive) return;
-          const baseEmissive = entry.baseEmissiveMap.get(mesh);
-          if (isSelected) {
-            mat.emissive.copy(_highlightColor);
-            mat.emissiveIntensity = 0.36;
-          } else if (isHovered) {
-            mat.emissive.copy(_hoverColor);
-            mat.emissiveIntensity = 0.25;
-          } else if (baseEmissive) {
-            mat.emissive.copy(baseEmissive);
-            mat.emissiveIntensity = baseEmissive.getHex() === 0 ? 0 : 0.25;
+          if (!mat) return;
+
+          const baseOpacity = entry.baseOpacityMap.get(mesh) ?? 1;
+          const baseTransparent = entry.baseTransparentMap.get(mesh) ?? false;
+          const baseDepthWrite = entry.baseDepthWriteMap.get(mesh) ?? true;
+          const prevTransparent = mat.transparent;
+
+          if (mode === 'ghosted') {
+            mat.transparent = true;
+            mat.opacity = 0.065;
+            mat.depthWrite = false;
+            if (mat.emissive) {
+              const baseEmissive = entry.baseEmissiveMap.get(mesh);
+              if (baseEmissive) mat.emissive.copy(baseEmissive);
+              mat.emissiveIntensity = 0;
+            }
+          } else {
+            mat.transparent = baseTransparent;
+            mat.opacity = baseOpacity;
+            mat.depthWrite = baseDepthWrite;
+
+            if (shellSet.has(mesh)) {
+              const keepSolidSkin =
+                isoId === partId ||
+                (currentOrganismId === 'human' && humanSystemFilterRef.current === 'Integumentary');
+              if (keepSolidSkin) {
+                mat.opacity = 0.78;
+                mat.depthWrite = true;
+              } else if (currentOrganismId === 'human') {
+                mat.opacity = showShell ? 0.2 : 0.72;
+                mat.depthWrite = !showShell;
+              } else if (currentOrganismId === 'fish') {
+                mat.opacity = showShell ? 0.42 : 0.9;
+                mat.depthWrite = !showShell;
+              } else {
+                mat.opacity = showShell ? 0.34 : 0.88;
+                mat.depthWrite = !showShell;
+              }
+            }
+
+            if (mat.emissive) {
+              const baseEmissive = entry.baseEmissiveMap.get(mesh);
+              if (isSelected) {
+                mat.emissive.copy(_highlightColor);
+                mat.emissiveIntensity = 0.36;
+              } else if (isHovered) {
+                mat.emissive.copy(_hoverColor);
+                mat.emissiveIntensity = 0.25;
+              } else if (baseEmissive) {
+                mat.emissive.copy(baseEmissive);
+                mat.emissiveIntensity = baseEmissive.getHex() === 0 ? 0 : 0.25;
+              }
+            }
+          }
+
+          if (mat.transparent !== prevTransparent) {
+            mat.needsUpdate = true;
           }
         });
-      });
-
-      // Toggle X-ray translucency on outer shell meshes
-      activeSpecimen.shellMeshes.forEach((mesh) => {
-        const mat = mesh.material as THREE.MeshPhysicalMaterial;
-        if (!mat) return;
-        if (currentOrganismId === 'human') {
-          mat.opacity = showShell ? 0.2 : 0.72;
-          mat.depthWrite = !showShell;
-        } else if (currentOrganismId === 'fish') {
-          mat.opacity = showShell ? 0.42 : 0.9;
-          mat.depthWrite = !showShell;
-        } else {
-          mat.opacity = showShell ? 0.34 : 0.88;
-          mat.depthWrite = !showShell;
-        }
       });
     };
 
@@ -350,6 +514,24 @@ export default function LivingAnatomyLab({
       const def = ORGANISMS.find((o) => o.id === id) ?? ORGANISMS[0];
       camTargetPos.set(...def.defaultCamera.position);
       orbitTargetGoal.set(...def.defaultCamera.target);
+      camTransitionActive = true;
+    };
+
+    const setCameraView = (view: CameraViewPreset) => {
+      const def = ORGANISMS.find((o) => o.id === currentOrganismId) ?? ORGANISMS[0];
+      const [tx, ty, tz] = def.defaultCamera.target;
+      const [px, py, pz] = def.defaultCamera.position;
+      const dist = Math.max(2.6, Math.hypot(px - tx, py - ty, pz - tz));
+      orbitTargetGoal.set(tx, ty, tz);
+      if (view === 'front') {
+        camTargetPos.set(tx, ty + dist * 0.08, tz + dist);
+      } else if (view === 'side') {
+        camTargetPos.set(tx + dist, ty + dist * 0.08, tz);
+      } else if (view === 'back') {
+        camTargetPos.set(tx, ty + dist * 0.08, tz - dist);
+      } else {
+        camTargetPos.set(tx, ty + dist * 0.92, tz + dist * 0.38);
+      }
       camTransitionActive = true;
     };
 
@@ -419,6 +601,7 @@ export default function LivingAnatomyLab({
       loadOrganism,
       focusPart,
       resetCamera,
+      setCameraView,
       applyVisualState,
       captureSnapshot,
     };
@@ -444,7 +627,9 @@ export default function LivingAnatomyLab({
       const hits = raycaster.intersectObjects(activeSpecimen.clickableMeshes, false);
       for (const hit of hits) {
         const pid = hit.object.userData?.partId;
-        if (typeof pid === 'string') return pid;
+        if (typeof pid !== 'string') continue;
+        if (getPartVisibilityMode(pid) !== 'visible') continue;
+        return pid;
       }
       return null;
     };
@@ -598,10 +783,18 @@ export default function LivingAnatomyLab({
     };
   }, []);
 
-  // Update visual highlight & X-ray shell state without rebuilding WebGL scene
+  // Update visual highlight, X-ray shell, layer peel & isolation state without rebuilding WebGL scene
   useEffect(() => {
     sceneApiRef.current?.applyVisualState();
-  }, [selectedPartId, hoveredPartId, xrayShell]);
+  }, [
+    selectedPartId,
+    hoveredPartId,
+    xrayShell,
+    hiddenPartIds,
+    isolatedPartId,
+    humanSystemFilter,
+    organismId,
+  ]);
 
   useEffect(() => {
     recordStep(`Loaded 3D Living Anatomy specimen: ${activeOrganism.name} (${activeOrganism.scientificName}).`);
@@ -619,6 +812,10 @@ export default function LivingAnatomyLab({
     setHoveredPartId(null);
     setShowFacts(false);
     setHumanSystemFilter('all');
+    setActiveLayerPreset('full');
+    setHiddenPartIds([]);
+    setIsolatedPartId(null);
+    setPartSearch('');
     sceneApiRef.current?.loadOrganism(nextId);
   };
 
@@ -629,6 +826,13 @@ export default function LivingAnatomyLab({
   }, [initialOrganismProp]);
 
   const handleSelectPart = (partId: string, focus = true) => {
+    if (hiddenPartIds.includes(partId)) {
+      setHiddenPartIds((prev) => prev.filter((id) => id !== partId));
+      setActiveLayerPreset('custom');
+    }
+    if (isolatedPartId && isolatedPartId !== partId) {
+      setIsolatedPartId(partId);
+    }
     setSelectedPartId(partId);
     setShowFacts(false);
     const partObj = activeOrganism.parts.find((p) => p.id === partId);
@@ -640,11 +844,75 @@ export default function LivingAnatomyLab({
     }
   };
 
+  const handleApplyLayerPreset = (presetId: Exclude<LayerPresetId, 'custom'>) => {
+    const preset = HUMAN_LAYER_PRESETS.find((p) => p.id === presetId);
+    if (!preset) return;
+    setActiveLayerPreset(presetId);
+    setHiddenPartIds(preset.hiddenIds);
+    setIsolatedPartId(null);
+    setHumanSystemFilter('all');
+    if (presetId === 'full') {
+      setXrayShell(true);
+    }
+    const firstVisible = activeOrganism.parts.find((p) => !preset.hiddenIds.includes(p.id));
+    if (firstVisible && preset.hiddenIds.includes(selectedPartId ?? '')) {
+      setSelectedPartId(firstVisible.id);
+    }
+    recordStep(`Peeled human anatomy to ${preset.label} layer view.`);
+  };
+
+  const handleHidePart = (partId: string) => {
+    const partObj = activeOrganism.parts.find((p) => p.id === partId);
+    setHiddenPartIds((prev) => (prev.includes(partId) ? prev : [...prev, partId]));
+    setActiveLayerPreset('custom');
+    if (isolatedPartId === partId) {
+      setIsolatedPartId(null);
+    }
+    const remaining = activeOrganism.parts.filter(
+      (p) => p.id !== partId && !hiddenPartIds.includes(p.id)
+    );
+    if (remaining.length > 0 && selectedPartId === partId) {
+      setSelectedPartId(remaining[0].id);
+    }
+    if (partObj) {
+      recordStep(`Hid ${partObj.name} layer to inspect deeper structures.`);
+    }
+  };
+
+  const handleToggleIsolate = (partId: string) => {
+    const partObj = activeOrganism.parts.find((p) => p.id === partId);
+    setIsolatedPartId((prev) => {
+      const next = prev === partId ? null : partId;
+      if (partObj) {
+        recordStep(
+          next
+            ? `Isolated ${partObj.name} in 3D dissection view.`
+            : `Exited isolated view of ${partObj.name}.`
+        );
+      }
+      return next;
+    });
+    if (hiddenPartIds.includes(partId)) {
+      setHiddenPartIds((prev) => prev.filter((id) => id !== partId));
+    }
+    sceneApiRef.current?.focusPart(partId);
+  };
+
+  const handleRestoreAllLayers = () => {
+    setHiddenPartIds([]);
+    setIsolatedPartId(null);
+    setHumanSystemFilter('all');
+    setActiveLayerPreset('full');
+    setPartSearch('');
+    recordStep(`Restored all anatomical layers for ${activeOrganism.name}.`);
+  };
+
   const handleStepPart = (dir: -1 | 1) => {
-    const parts = activeOrganism.parts;
+    const parts = filteredDockParts.length > 0 ? filteredDockParts : activeOrganism.parts;
     if (parts.length === 0) return;
-    const idx = selectedPartIndex >= 0 ? selectedPartIndex : 0;
-    const nextIdx = (idx + dir + parts.length) % parts.length;
+    const idx = parts.findIndex((p) => p.id === selectedPartId);
+    const baseIdx = idx >= 0 ? idx : 0;
+    const nextIdx = (baseIdx + dir + parts.length) % parts.length;
     handleSelectPart(parts[nextIdx].id, true);
   };
 
@@ -657,14 +925,14 @@ export default function LivingAnatomyLab({
       : `${activeOrganism.name} features ${activeOrganism.parts.length} interactive anatomical structures.`;
     const defaultSteps = [
       `Loaded 3D Living Anatomy specimen: ${activeOrganism.name} (${activeOrganism.scientificName}).`,
-      `Adjusted anatomical visualization (X-Ray Shell ${xrayShell ? 'On' : 'Off'}, Explode ${Math.round(explodeTarget * 100)}%, Motion ${motionEnabled ? `${motionSpeed}x` : 'Paused'}).`,
+      `Adjusted anatomical visualization (X-Ray Shell ${xrayShell ? 'On' : 'Off'}, Explode ${Math.round(explodeTarget * 100)}%, Layer ${activeLayerPreset}, Motion ${motionEnabled ? `${motionSpeed}x` : 'Paused'}).`,
       partSummary,
     ];
 
     return {
       experimentTitle: `3D Anatomy: ${activeOrganism.name}`,
       outcome: partSummary,
-      measurements: `${activeOrganism.parts.length} anatomical structures · Explode ${Math.round(explodeTarget * 100)}% · X-Ray ${xrayShell ? 'On' : 'Off'} · Motion ${motionSpeed}x`,
+      measurements: `${activeOrganism.parts.length} anatomical structures · Hidden ${hiddenPartIds.length} · Explode ${Math.round(explodeTarget * 100)}% · X-Ray ${xrayShell ? 'On' : 'Off'}`,
       notes: factsNote,
       stepsTaken: recordedSteps.length > 0 ? recordedSteps : defaultSteps,
     };
@@ -732,57 +1000,91 @@ export default function LivingAnatomyLab({
           </div>
         </div>
 
-        <nav
-          aria-label="Select living organism"
-          className="pointer-events-auto flex items-center gap-1.5 p-1 rounded-2xl border border-white/12 shadow-xl max-w-full"
-          style={{ backgroundColor: 'rgba(15, 23, 42, 0.92)' }}
-        >
-          <button
-            type="button"
-            onClick={() => {
-              const prevIdx = (activeOrganismIndex - 1 + ORGANISMS.length) % ORGANISMS.length;
-              handleOrganismSelect(ORGANISMS[prevIdx].id);
-            }}
-            aria-label="Previous 3D model"
-            className="p-1.5 rounded-xl text-slate-300 hover:text-white hover:bg-white/10 transition-colors shrink-0"
+        <div className="flex flex-wrap items-center gap-2 max-w-full">
+          {/* Anatomical Plane / Camera Orientation Presets */}
+          <div
+            className="pointer-events-auto hidden md:flex items-center gap-1 p-1 rounded-2xl border border-white/12 shadow-xl"
+            style={{ backgroundColor: 'rgba(15, 23, 42, 0.92)' }}
           >
-            <ChevronLeft size={15} />
-          </button>
+            {(['front', 'side', 'back', 'top'] as const).map((view) => (
+              <button
+                key={view}
+                type="button"
+                onClick={() => {
+                  sceneApiRef.current?.setCameraView(view);
+                  recordStep(`Switched camera angle to ${view} view.`);
+                }}
+                className="px-2.5 py-1 rounded-xl text-[11px] font-semibold text-slate-300 hover:text-white hover:bg-white/10 transition-colors capitalize whitespace-nowrap"
+              >
+                {view}
+              </button>
+            ))}
+          </div>
 
-          <button
-            type="button"
-            onClick={() => setCatalogOpen((prev) => !prev)}
-            className={cn(
-              'inline-flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors whitespace-nowrap shrink-0',
-              catalogOpen
-                ? 'bg-sky-500 text-slate-950'
-                : 'bg-white/8 text-white hover:bg-white/14'
-            )}
+          {organismId !== 'human' && organismId.startsWith('human_') && (
+            <button
+              type="button"
+              onClick={() => handleOrganismSelect('human')}
+              className="pointer-events-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-2xl border border-sky-400/35 text-xs font-semibold text-sky-300 hover:bg-sky-500/20 shadow-xl transition-colors whitespace-nowrap"
+              style={{ backgroundColor: 'rgba(15, 23, 42, 0.92)' }}
+            >
+              <ArrowLeft size={13} />
+              <span>Full Body</span>
+            </button>
+          )}
+
+          <nav
+            aria-label="Select living organism"
+            className="pointer-events-auto flex items-center gap-1.5 p-1 rounded-2xl border border-white/12 shadow-xl max-w-full"
+            style={{ backgroundColor: 'rgba(15, 23, 42, 0.92)' }}
           >
-            <LayoutGrid size={14} />
-            <span className="max-w-[165px] truncate">{activeOrganism.name}</span>
-            <span
+            <button
+              type="button"
+              onClick={() => {
+                const prevIdx = (activeOrganismIndex - 1 + ORGANISMS.length) % ORGANISMS.length;
+                handleOrganismSelect(ORGANISMS[prevIdx].id);
+              }}
+              aria-label="Previous 3D model"
+              className="p-1.5 rounded-xl text-slate-300 hover:text-white hover:bg-white/10 transition-colors shrink-0"
+            >
+              <ChevronLeft size={15} />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setCatalogOpen((prev) => !prev)}
               className={cn(
-                'text-[10px] tabular-nums px-1.5 py-0.5 rounded-md',
-                catalogOpen ? 'bg-slate-950/20 text-slate-950' : 'bg-sky-500/20 text-sky-300'
+                'inline-flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors whitespace-nowrap shrink-0',
+                catalogOpen
+                  ? 'bg-sky-500 text-slate-950'
+                  : 'bg-white/8 text-white hover:bg-white/14'
               )}
             >
-              {activeOrganismIndex + 1}/{ORGANISMS.length}
-            </span>
-          </button>
+              <LayoutGrid size={14} />
+              <span className="max-w-[165px] truncate">{activeOrganism.name}</span>
+              <span
+                className={cn(
+                  'text-[10px] tabular-nums px-1.5 py-0.5 rounded-md',
+                  catalogOpen ? 'bg-slate-950/20 text-slate-950' : 'bg-sky-500/20 text-sky-300'
+                )}
+              >
+                {activeOrganismIndex + 1}/{ORGANISMS.length}
+              </span>
+            </button>
 
-          <button
-            type="button"
-            onClick={() => {
-              const nextIdx = (activeOrganismIndex + 1) % ORGANISMS.length;
-              handleOrganismSelect(ORGANISMS[nextIdx].id);
-            }}
-            aria-label="Next 3D model"
-            className="p-1.5 rounded-xl text-slate-300 hover:text-white hover:bg-white/10 transition-colors shrink-0"
-          >
-            <ChevronRight size={15} />
-          </button>
-        </nav>
+            <button
+              type="button"
+              onClick={() => {
+                const nextIdx = (activeOrganismIndex + 1) % ORGANISMS.length;
+                handleOrganismSelect(ORGANISMS[nextIdx].id);
+              }}
+              aria-label="Next 3D model"
+              className="p-1.5 rounded-xl text-slate-300 hover:text-white hover:bg-white/10 transition-colors shrink-0"
+            >
+              <ChevronRight size={15} />
+            </button>
+          </nav>
+        </div>
       </header>
 
       {/* Searchable 103-Organism Catalog Drawer (solid rgba, zero backdrop-filter over WebGL) */}
@@ -931,7 +1233,7 @@ export default function LivingAnatomyLab({
           >
             {/* Selected Part Name & Biological Functionality */}
             {selectedPart ? (
-              <div className="space-y-2 pb-3 border-b border-white/10">
+              <div className="space-y-2 pb-2.5 border-b border-white/10">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div className="min-w-0 flex-1 space-y-0.5">
                     <div className="flex items-center gap-2">
@@ -943,6 +1245,11 @@ export default function LivingAnatomyLab({
                       <h2 className="text-sm sm:text-base font-semibold text-white truncate">
                         {selectedPart.name}
                       </h2>
+                      {isolatedPartId === selectedPart.id && (
+                        <span className="px-1.5 py-0.5 rounded-md bg-amber-500/20 text-amber-300 text-[10px] font-semibold whitespace-nowrap">
+                          Isolated
+                        </span>
+                      )}
                     </div>
                     <p className="text-xs text-slate-400 tabular-nums">
                       {activeOrganism.name}
@@ -953,7 +1260,7 @@ export default function LivingAnatomyLab({
                     </p>
                   </div>
 
-                  <div className="flex items-center gap-1.5 shrink-0">
+                  <div className="flex flex-wrap items-center gap-1.5 shrink-0">
                     <button
                       type="button"
                       onClick={() => handleStepPart(-1)}
@@ -978,6 +1285,41 @@ export default function LivingAnatomyLab({
                       <Focus size={13} />
                       <span>Focus</span>
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => handleToggleIsolate(selectedPart.id)}
+                      className={cn(
+                        'inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap',
+                        isolatedPartId === selectedPart.id
+                          ? 'bg-amber-500 text-slate-950 font-semibold'
+                          : 'bg-white/8 text-slate-200 hover:bg-white/15'
+                      )}
+                    >
+                      <Eye size={13} />
+                      <span>{isolatedPartId === selectedPart.id ? 'Show Context' : 'Isolate'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleHidePart(selectedPart.id)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-white/8 text-slate-200 hover:bg-rose-500/20 hover:text-rose-200 text-xs font-medium transition-colors whitespace-nowrap"
+                    >
+                      <EyeOff size={13} />
+                      <span>Hide</span>
+                    </button>
+                    {organismId === 'human' && HUMAN_SUB_ORGAN_MAP[selectedPart.id] && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const target = HUMAN_SUB_ORGAN_MAP[selectedPart.id];
+                          recordStep(`Opened high-magnification ${target.label} from full human atlas.`);
+                          handleOrganismSelect(target.organismId);
+                        }}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 text-xs font-semibold transition-colors whitespace-nowrap"
+                      >
+                        <Microscope size={13} />
+                        <span>{HUMAN_SUB_ORGAN_MAP[selectedPart.id].label}</span>
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => setShowFacts((prev) => !prev)}
@@ -1012,57 +1354,127 @@ export default function LivingAnatomyLab({
               </p>
             )}
 
-            {/* Human Body Systems Filter (StudyFi Body Lab parity) */}
+            {/* Human Body Atlas: Anatomical Layer Peel & System Filter */}
             {organismId === 'human' && (
-              <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
-                {[
-                  { id: 'all', label: 'Whole Body' },
-                  { id: 'Nervous', label: 'Nervous' },
-                  { id: 'Circulatory', label: 'Circulatory' },
-                  { id: 'Respiratory', label: 'Respiratory' },
-                  { id: 'Digestive', label: 'Digestive' },
-                  { id: 'Urinary', label: 'Urinary' },
-                  { id: 'Skeletal', label: 'Skeletal' },
-                  { id: 'Integumentary', label: 'Muscular & Skin' },
-                ].map((sys) => {
-                  const active = humanSystemFilter === sys.id;
-                  return (
-                    <button
-                      key={sys.id}
-                      type="button"
-                      onClick={() => {
-                        setHumanSystemFilter(sys.id);
-                        recordStep(`Filtered human anatomy systems to ${sys.label}.`);
-                        if (sys.id !== 'all') {
-                          const match = activeOrganism.parts.find((p) =>
-                            p.system.toLowerCase().includes(sys.id.toLowerCase())
-                          );
-                          if (match) handleSelectPart(match.id, true);
-                        }
-                      }}
-                      className={cn(
-                        'px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 border',
-                        active
-                          ? 'bg-emerald-500 text-slate-950 border-emerald-400'
-                          : 'bg-white/5 text-slate-300 border-white/10 hover:text-white hover:bg-white/10'
-                      )}
-                    >
-                      {sys.label}
-                    </button>
-                  );
-                })}
+              <div className="space-y-1.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 mr-1 whitespace-nowrap">
+                      Peel Layer
+                    </span>
+                    {HUMAN_LAYER_PRESETS.map((preset) => {
+                      const active = activeLayerPreset === preset.id && isolatedPartId === null && humanSystemFilter === 'all';
+                      return (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          onClick={() => handleApplyLayerPreset(preset.id)}
+                          className={cn(
+                            'px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 border',
+                            active
+                              ? 'bg-sky-500 text-slate-950 border-sky-400'
+                              : 'bg-white/6 text-slate-300 border-white/10 hover:text-white hover:bg-white/12'
+                          )}
+                        >
+                          {preset.label}
+                        </button>
+                      );
+                    })}
+                    {(hiddenPartIds.length > 0 || isolatedPartId !== null || humanSystemFilter !== 'all') && (
+                      <button
+                        type="button"
+                        onClick={handleRestoreAllLayers}
+                        className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-400/35 hover:bg-emerald-500/30 transition-colors whitespace-nowrap shrink-0"
+                      >
+                        Restore All
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="relative w-full sm:w-48 shrink-0">
+                    <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                      type="text"
+                      value={partSearch}
+                      onChange={(e) => setPartSearch(e.target.value)}
+                      placeholder="Find organ, bone, nerve..."
+                      className="w-full pl-7 pr-6 py-1 rounded-lg bg-slate-950/90 border border-white/12 text-[11px] text-white placeholder:text-slate-500 focus:outline-none focus:border-sky-400"
+                    />
+                    {partSearch && (
+                      <button
+                        type="button"
+                        onClick={() => setPartSearch('')}
+                        aria-label="Clear structure filter"
+                        className="absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                      >
+                        <X size={11} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+                  {HUMAN_SYSTEM_FILTERS.map((sys) => {
+                    const active = humanSystemFilter === sys.id;
+                    return (
+                      <button
+                        key={sys.id}
+                        type="button"
+                        onClick={() => {
+                          setHumanSystemFilter(sys.id);
+                          setIsolatedPartId(null);
+                          if (sys.id !== 'all') {
+                            setHiddenPartIds([]);
+                            setActiveLayerPreset('custom');
+                            const match = activeOrganism.parts.find((p) =>
+                              p.system.toLowerCase().includes(sys.id.toLowerCase())
+                            );
+                            if (match) {
+                              handleSelectPart(match.id, true);
+                            }
+                          } else {
+                            setActiveLayerPreset(hiddenPartIds.length === 0 ? 'full' : 'custom');
+                          }
+                          recordStep(`Filtered 3D human anatomy to ${sys.label}.`);
+                        }}
+                        className={cn(
+                          'px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 border',
+                          active
+                            ? 'bg-emerald-500 text-slate-950 border-emerald-400'
+                            : 'bg-white/5 text-slate-300 border-white/10 hover:text-white hover:bg-white/10'
+                        )}
+                      >
+                        {sys.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Non-human Restore Banner when layers hidden/isolated */}
+            {organismId !== 'human' && (hiddenPartIds.length > 0 || isolatedPartId !== null) && (
+              <div className="flex items-center justify-between gap-2 text-xs text-slate-300">
+                <span>
+                  {isolatedPartId
+                    ? 'Single-structure isolation active'
+                    : `${hiddenPartIds.length} structure${hiddenPartIds.length === 1 ? '' : 's'} hidden`}
+                </span>
+                <button
+                  type="button"
+                  onClick={handleRestoreAllLayers}
+                  className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-400/35 hover:bg-emerald-500/30 transition-colors whitespace-nowrap"
+                >
+                  Restore All Parts
+                </button>
               </div>
             )}
 
             {/* Body Parts Quick-Select Bar */}
             <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
-              {(organismId === 'human' && humanSystemFilter !== 'all'
-                ? activeOrganism.parts.filter((p) =>
-                    p.system.toLowerCase().includes(humanSystemFilter.toLowerCase())
-                  )
-                : activeOrganism.parts
-              ).map((part) => {
+              {filteredDockParts.map((part) => {
                 const isSelected = part.id === selectedPartId;
+                const isHidden = hiddenPartIds.includes(part.id);
                 return (
                   <button
                     key={part.id}
@@ -1072,7 +1484,9 @@ export default function LivingAnatomyLab({
                       'inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium transition-colors whitespace-nowrap shrink-0 border',
                       isSelected
                         ? 'bg-sky-500 text-slate-950 border-sky-400 font-semibold'
-                        : 'bg-white/6 text-slate-200 border-white/8 hover:bg-white/12'
+                        : isHidden
+                          ? 'bg-slate-950/70 text-slate-500 border-white/5 line-through hover:text-slate-200'
+                          : 'bg-white/6 text-slate-200 border-white/8 hover:bg-white/12'
                     )}
                   >
                     <span
@@ -1086,6 +1500,11 @@ export default function LivingAnatomyLab({
                   </button>
                 );
               })}
+              {filteredDockParts.length === 0 && (
+                <span className="text-xs text-slate-400 px-2 py-1">
+                  No matching structures for &ldquo;{partSearch}&rdquo;.
+                </span>
+              )}
             </div>
 
             {/* Studio Interactive Controls */}

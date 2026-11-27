@@ -31,6 +31,7 @@ import {
   Save,
   Trash2,
   Edit3,
+  FileDown,
   Loader2,
   Box
 } from "lucide-react";
@@ -47,6 +48,7 @@ import { cn } from "../lib/utils";
 import { ElementData, elements } from "../lib/elementData";
 import { useAuth } from "../hooks/useAuth";
 import { learningDataService } from "../services/learningData";
+import { downloadPortfolioLabReportPdf, downloadSingleLabReportPdf } from "../lib/pdfLabReport";
 import type { LabResult } from "../types";
 
 type Substance = {
@@ -4183,9 +4185,25 @@ export default function VirtualLab({
                 </div>
               )}
 
-              <h3 className="text-xs font-black uppercase tracking-widest text-muted-foreground mb-4">
-                Saved Lab Results ({savedLabResults.length})
-              </h3>
+              <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                <h3 className="text-xs font-black uppercase tracking-widest text-muted-foreground">
+                  Saved Lab Results ({savedLabResults.length})
+                </h3>
+                {savedLabResults.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      downloadPortfolioLabReportPdf(savedLabResults, {
+                        studentEmail: user?.email || undefined,
+                      })
+                    }
+                    className="px-3 py-1.5 rounded-xl border border-border bg-card hover:bg-muted text-xs font-bold text-foreground flex items-center gap-1.5 whitespace-nowrap"
+                  >
+                    <FileDown size={13} className="text-primary" />
+                    <span>Download All PDF Report</span>
+                  </button>
+                )}
+              </div>
               {loadingLabResults ? (
                 <div className="py-8 flex items-center gap-2 text-sm text-muted-foreground">
                   <Loader2 size={16} className="animate-spin" />
@@ -4209,6 +4227,19 @@ export default function VirtualLab({
                             {item.subject}
                           </span>
                           <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                downloadSingleLabReportPdf(item, {
+                                  studentEmail: user?.email || undefined,
+                                })
+                              }
+                              aria-label="Download PDF lab report"
+                              title="Download PDF report"
+                              className="p-1.5 rounded-lg hover:bg-muted text-primary"
+                            >
+                              <FileDown size={14} />
+                            </button>
                             <button
                               onClick={() => {
                                 setEditingLabId(item.id);

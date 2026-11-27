@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Palette, Save } from 'lucide-react';
+import { FileDown, Save } from 'lucide-react';
 import { useSaveLabResult } from '../useSaveLabResult';
 import { cn } from '../../../lib/utils';
 
@@ -50,7 +50,7 @@ export default function ColorMixingLab() {
 
   const [wavelengthNm, setWavelengthNm] = useState<number>(532);
 
-  const { saveResult, saving, feedback, canSave } = useSaveLabResult('physics');
+  const { saveResult, downloadPdfReport, saving, feedback, canSave } = useSaveLabResult('physics');
 
   const cmykRgb: [number, number, number] = [
     Math.round(255 * (1 - cyan / 100)),
@@ -252,27 +252,57 @@ export default function ColorMixingLab() {
               </div>
             </div>
 
-            {canSave && (
+            <div className="flex flex-wrap items-center gap-2">
+              {canSave && (
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() =>
+                    saveResult({
+                      experimentTitle: `Color & Optics (${mode.toUpperCase()})`,
+                      outcome:
+                        mode === 'spectrum'
+                          ? `Measured ${wavelengthNm} nm (${photonEv} eV) → ${activeHex}`
+                          : `Mixed color ${activeHex} via ${mode.toUpperCase()} model`,
+                      formula: mode === 'spectrum' ? 'E = hc / λ' : mode === 'rgb' ? 'Additive RGB' : 'Subtractive CMY',
+                      measurements: `Hex: ${activeHex}`,
+                    })
+                  }
+                  className="px-3.5 py-2 rounded-xl bg-primary text-primary-foreground text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap"
+                >
+                  <Save size={14} />
+                  <span>{saving ? 'Saving...' : 'Save'}</span>
+                </button>
+              )}
               <button
                 type="button"
-                disabled={saving}
                 onClick={() =>
-                  saveResult({
+                  downloadPdfReport({
                     experimentTitle: `Color & Optics (${mode.toUpperCase()})`,
                     outcome:
                       mode === 'spectrum'
-                        ? `Measured ${wavelengthNm} nm (${photonEv} eV) → ${activeHex}`
-                        : `Mixed color ${activeHex} via ${mode.toUpperCase()} model`,
-                    formula: mode === 'spectrum' ? 'E = hc / λ' : mode === 'rgb' ? 'Additive RGB' : 'Subtractive CMY',
-                    measurements: `Hex: ${activeHex}`,
+                        ? `Measured photon wavelength λ=${wavelengthNm} nm (${photonEv} eV, ${frequencyThz} THz) corresponding to ${activeHex}.`
+                        : `Synthesized target color ${activeHex} (rgb ${activeRgb.join(', ')}) via ${mode.toUpperCase()} model.`,
+                    formula: mode === 'spectrum' ? 'E = hc / λ' : mode === 'rgb' ? 'Additive RGB Light Mixing' : 'Subtractive CMY Pigment Mixing',
+                    measurements:
+                      mode === 'spectrum'
+                        ? `λ=${wavelengthNm} nm | Photon Energy=${photonEv} eV | Frequency=${frequencyThz} THz | Hex=${activeHex}`
+                        : `Hex=${activeHex} | RGB=(${activeRgb.join(', ')})`,
+                    stepsTaken: [
+                      `Selected ${mode.toUpperCase()} color optics experiment.`,
+                      mode === 'spectrum'
+                        ? `Tuned monochromatic wavelength slider to ${wavelengthNm} nm.`
+                        : `Balanced spectral channel intensities to rgb(${activeRgb.join(', ')}).`,
+                      `Recorded optical color output ${activeHex}.`,
+                    ],
                   })
                 }
-                className="px-3.5 py-2 rounded-xl bg-primary text-primary-foreground text-xs font-semibold flex items-center gap-1.5"
+                className="px-3.5 py-2 rounded-xl bg-emerald-600 text-white text-xs font-semibold flex items-center gap-1.5 hover:bg-emerald-500 whitespace-nowrap"
               >
-                <Save size={14} />
-                <span>{saving ? 'Saving...' : 'Save'}</span>
+                <FileDown size={14} />
+                <span>PDF Report</span>
               </button>
-            )}
+            </div>
           </div>
           {feedback && <p className="text-xs text-emerald-600 dark:text-emerald-400">{feedback.text}</p>}
         </div>

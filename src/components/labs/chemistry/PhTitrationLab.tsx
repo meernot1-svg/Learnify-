@@ -9,7 +9,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { Droplet, FlaskConical, RotateCcw, Save } from 'lucide-react';
+import { Droplet, FileDown, FlaskConical, RotateCcw, Save } from 'lucide-react';
 import { useSaveLabResult } from '../useSaveLabResult';
 import { cn } from '../../../lib/utils';
 
@@ -107,7 +107,7 @@ export default function PhTitrationLab() {
   const [analyte, setAnalyte] = useState<'strong' | 'weak'>('strong');
   const [naohAdded, setNaohAdded] = useState<number>(0);
 
-  const { saveResult, saving, feedback, canSave } = useSaveLabResult('chemistry');
+  const { saveResult, downloadPdfReport, saving, feedback, canSave } = useSaveLabResult('chemistry');
 
   const sampleObj = SAMPLES.find((s) => s.name === selectedSample) ?? SAMPLES[0];
 
@@ -309,14 +309,14 @@ export default function PhTitrationLab() {
                 ))}
               </div>
 
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
                   onClick={() => setNaohAdded(0)}
-                  className="flex-1 py-2 rounded-xl border border-border bg-card hover:bg-muted text-xs font-semibold flex items-center justify-center gap-1.5"
+                  className="py-2 px-3 rounded-xl border border-border bg-card hover:bg-muted text-xs font-semibold flex items-center justify-center gap-1.5 whitespace-nowrap"
                 >
                   <RotateCcw size={13} />
-                  Reset Burette
+                  Reset
                 </button>
                 {canSave && (
                   <button
@@ -330,12 +330,33 @@ export default function PhTitrationLab() {
                         measurements: `pH: ${currentTitrationPh} | Volume NaOH: ${naohAdded.toFixed(1)} mL`,
                       })
                     }
-                    className="flex-1 py-2 rounded-xl bg-primary text-primary-foreground text-xs font-semibold flex items-center justify-center gap-1.5"
+                    className="flex-1 py-2 px-3 rounded-xl bg-primary text-primary-foreground text-xs font-semibold flex items-center justify-center gap-1.5 whitespace-nowrap"
                   >
                     <Save size={13} />
-                    <span>{saving ? 'Saving...' : 'Save Result'}</span>
+                    <span>{saving ? 'Saving...' : 'Save Lab'}</span>
                   </button>
                 )}
+                <button
+                  type="button"
+                  onClick={() =>
+                    downloadPdfReport({
+                      experimentTitle: `${analyte === 'strong' ? 'Strong' : 'Weak'} Acid-Base Titration`,
+                      outcome: `Titrated 25.0 mL of 0.10 M ${analyte === 'strong' ? 'HCl' : 'CH3COOH'} with ${naohAdded.toFixed(1)} mL 0.10 M NaOH reaching pH ${currentTitrationPh.toFixed(2)}.`,
+                      formula: analyte === 'strong' ? 'HCl + NaOH → NaCl + H₂O' : 'CH₃COOH + NaOH → CH₃COONa + H₂O',
+                      measurements: `pH: ${currentTitrationPh.toFixed(2)} | [H⁺] = ${hConc} M | [OH⁻] = ${ohConc} M | Volume NaOH: ${naohAdded.toFixed(1)} mL | Indicator: ${indicator}`,
+                      stepsTaken: [
+                        `Prepared 25.0 mL of 0.10 M ${analyte === 'strong' ? 'strong acid (HCl)' : 'weak acid (CH3COOH, pKa 4.76)'} in flask.`,
+                        `Selected ${indicator} colorimetric pH indicator.`,
+                        `Dispensed ${naohAdded.toFixed(1)} mL of 0.10 M NaOH titrant from burette.`,
+                        `Recorded final solution pH = ${currentTitrationPh.toFixed(2)} ([H⁺] = ${hConc} M).`,
+                      ],
+                    })
+                  }
+                  className="flex-1 py-2 px-3 rounded-xl bg-emerald-600 text-white text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-emerald-500 whitespace-nowrap"
+                >
+                  <FileDown size={13} />
+                  <span>PDF Report</span>
+                </button>
               </div>
             </div>
           ) : (
@@ -373,6 +394,26 @@ export default function PhTitrationLab() {
                 />
               </div>
               <p className="text-xs text-muted-foreground">{sampleObj.note}</p>
+              <button
+                type="button"
+                onClick={() =>
+                  downloadPdfReport({
+                    experimentTitle: `pH & Dilution Study: ${sampleObj.name}`,
+                    outcome: `Measured diluted pH = ${effectiveSamplePh.toFixed(2)} after adding ${waterDilutionMl} mL H₂O. ${sampleObj.note}`,
+                    formula: 'pH = -log₁₀[H⁺]',
+                    measurements: `Initial pH: ${sampleObj.basePh} | Diluted pH: ${effectiveSamplePh.toFixed(2)} | [H⁺] = ${hConc} M | Water added: +${waterDilutionMl} mL`,
+                    stepsTaken: [
+                      `Sampled ${sampleObj.name} (baseline pH ${sampleObj.basePh}).`,
+                      `Added ${waterDilutionMl} mL distilled water dilution and checked ${indicator} indicator color.`,
+                      `Recorded final equilibrium pH = ${effectiveSamplePh.toFixed(2)}.`,
+                    ],
+                  })
+                }
+                className="w-full py-2 px-3 rounded-xl bg-emerald-600 text-white text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-emerald-500 whitespace-nowrap"
+              >
+                <FileDown size={13} />
+                <span>Download PDF Report</span>
+              </button>
             </div>
           )}
 

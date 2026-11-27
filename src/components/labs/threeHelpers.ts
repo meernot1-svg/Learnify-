@@ -9,6 +9,7 @@ export interface ThreeViewportContext {
   controls: OrbitControls;
   isSoftwareGl: boolean;
   afterDraw: (tick: () => void) => void;
+  captureSnapshot: () => string | null;
   dispose: () => void;
 }
 
@@ -164,7 +165,17 @@ export function createThreeViewport(
     }
   };
 
-  return { scene, camera, renderer, controls, isSoftwareGl, afterDraw, dispose };
+  const captureSnapshot = (): string | null => {
+    if (disposed) return null;
+    try {
+      renderer.render(scene, camera);
+      return renderer.domElement.toDataURL('image/png');
+    } catch {
+      return null;
+    }
+  };
+
+  return { scene, camera, renderer, controls, isSoftwareGl, afterDraw, captureSnapshot, dispose };
 }
 
 export function disposeObject3D(root: THREE.Object3D): void {

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Plus, RotateCcw, Save, Zap } from 'lucide-react';
+import { FileDown, Plus, RotateCcw, Save, Zap } from 'lucide-react';
 import { useSaveLabResult } from '../useSaveLabResult';
 import { cn } from '../../../lib/utils';
 
@@ -27,7 +27,7 @@ export default function EmFieldsLab() {
     vy: 0,
   });
 
-  const { saveResult, saving, feedback, canSave } = useSaveLabResult('physics');
+  const { saveResult, downloadPdfReport, saving, feedback, canSave } = useSaveLabResult('physics');
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -320,26 +320,63 @@ export default function EmFieldsLab() {
               {mode === 'electric' ? 'E = k·q / r²' : 'F = q(v × B) | r = mv / qB'}
             </p>
           </div>
-          {canSave && (
+          <div className="flex flex-wrap gap-2">
+            {canSave && (
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() =>
+                  saveResult({
+                    experimentTitle: `EM Fields (${mode === 'electric' ? 'Electrostatic' : 'Lorentz B-Field'})`,
+                    outcome:
+                      mode === 'electric'
+                        ? `Mapped electric vector field across ${charges.length} point charges`
+                        : `Observed Lorentz circular orbit r=${cyclotronRadius} mm at B=${bFieldStrength} T`,
+                    formula: mode === 'electric' ? 'E = kq/r²' : 'r = mv/qB',
+                  })
+                }
+                className="flex-1 py-2 px-3 rounded-xl bg-primary text-primary-foreground text-xs font-semibold flex items-center justify-center gap-1.5 hover:opacity-90 whitespace-nowrap"
+              >
+                <Save size={14} />
+                <span>{saving ? 'Saving...' : 'Save Lab'}</span>
+              </button>
+            )}
             <button
               type="button"
-              disabled={saving}
-              onClick={() =>
-                saveResult({
+              onClick={() => {
+                let snapshotDataUrl: string | undefined;
+                try {
+                  snapshotDataUrl = canvasRef.current?.toDataURL('image/png');
+                } catch {
+                  snapshotDataUrl = undefined;
+                }
+                downloadPdfReport({
                   experimentTitle: `EM Fields (${mode === 'electric' ? 'Electrostatic' : 'Lorentz B-Field'})`,
                   outcome:
                     mode === 'electric'
-                      ? `Mapped electric vector field across ${charges.length} point charges`
-                      : `Observed Lorentz circular orbit r=${cyclotronRadius} mm at B=${bFieldStrength} T`,
-                  formula: mode === 'electric' ? 'E = kq/r²' : 'r = mv/qB',
-                })
-              }
-              className="w-full py-2 rounded-xl bg-primary text-primary-foreground text-xs font-semibold flex items-center justify-center gap-2 hover:opacity-90"
+                      ? `Mapped electric vector field and equipotential contours across ${charges.length} point charges (+q₀ test probe trajectory).`
+                      : `Observed charged particle cyclotron circular orbit radius r=${cyclotronRadius} mm under magnetic flux B=${bFieldStrength.toFixed(1)} T at v=${particleSpeed} m/s.`,
+                  formula: mode === 'electric' ? 'E = kq/r²' : 'F = q(v × B) | r = mv/qB',
+                  measurements:
+                    mode === 'electric'
+                      ? `Active point charges: ${charges.length} | Equipotentials: ${showEquipotential ? 'Visible' : 'Hidden'}`
+                      : `Magnetic Flux B=${bFieldStrength.toFixed(1)} T | Particle Speed v=${particleSpeed} m/s | Cyclotron r=${cyclotronRadius} mm`,
+                  stepsTaken: [
+                    `Selected ${mode === 'electric' ? 'Electrostatic Coulomb Vector Field' : 'Magnetic Lorentz Force'} simulation.`,
+                    mode === 'electric'
+                      ? `Arranged ${charges.length} source charges (${charges.filter((c) => c.q > 0).length} positive, ${charges.filter((c) => c.q < 0).length} negative).`
+                      : `Adjusted uniform magnetic field B=${bFieldStrength.toFixed(1)} T and particle velocity v=${particleSpeed} m/s.`,
+                    `Recorded resulting vector field and orbital dynamics.`,
+                  ],
+                  snapshotDataUrl,
+                });
+              }}
+              className="flex-1 py-2 px-3 rounded-xl bg-emerald-600 text-white text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-emerald-500 whitespace-nowrap"
             >
-              <Save size={14} />
-              <span>{saving ? 'Saving...' : 'Save Field Result'}</span>
+              <FileDown size={14} />
+              <span>PDF Report</span>
             </button>
-          )}
+          </div>
           {feedback && <p className="text-xs text-emerald-600 dark:text-emerald-400">{feedback.text}</p>}
         </div>
       </div>

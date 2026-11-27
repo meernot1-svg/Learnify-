@@ -1,9 +1,21 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { Atom, Eye, Pause, Play, Plus, RotateCcw, Save, Sparkles, Trash2 } from 'lucide-react';
+import { Atom, Eye, FileDown, Flame, Pause, Play, Plus, RotateCcw, Save, Trash2 } from 'lucide-react';
 import { createThreeViewport, disposeObject3D } from '../threeHelpers';
 import { useSaveLabResult } from '../useSaveLabResult';
 import { cn } from '../../../lib/utils';
+
+const ELECTRONEGATIVITY: Record<ElementSymbol, number> = {
+  H: 2.2,
+  C: 2.55,
+  N: 3.04,
+  O: 3.44,
+  F: 3.98,
+  Cl: 3.16,
+  S: 2.58,
+  P: 2.19,
+  Na: 0.93,
+};
 
 type ElementSymbol = 'H' | 'C' | 'N' | 'O' | 'F' | 'Cl' | 'S' | 'P' | 'Na';
 
@@ -293,13 +305,26 @@ export default function Molecules3DLab() {
 
   const [displayStyle, setDisplayStyle] = useState<'ball-stick' | 'space-fill'>('ball-stick');
   const [autoRotate, setAutoRotate] = useState<boolean>(true);
+  const [temperatureK, setTemperatureK] = useState<number>(298);
+  const [showDipoles, setShowDipoles] = useState<boolean>(true);
   const [webglError, setWebglError] = useState<boolean>(false);
 
   const mountRef = useRef<HTMLDivElement>(null);
+  const captureSnapshotRef = useRef<(() => string | null) | null>(null);
   const autoRotateRef = useRef(autoRotate);
+  const tempKRef = useRef(temperatureK);
   autoRotateRef.current = autoRotate;
+  tempKRef.current = temperatureK;
 
-  const { saveResult, saving, feedback, canSave } = useSaveLabResult('chemistry');
+  const {
+    saveResult,
+    downloadPdfReport,
+    recordStep,
+    recordedSteps,
+    saving,
+    feedback,
+    canSave,
+  } = useSaveLabResult('chemistry');
 
   const activePreset = useMemo(
     () => MOLECULES.find((m) => m.id === selectedId) ?? MOLECULES[0],
@@ -343,7 +368,8 @@ export default function Molecules3DLab() {
     }
     setWebglError(false);
 
-    const { scene, camera, renderer, controls, afterDraw, dispose } = ctx;
+    const { scene, camera, renderer, controls, afterDraw, captureSnapshot, dispose } = ctx;
+    captureSnapshotRef.current = captureSnapshot;
     const molGroup = new THREE.Group();
     scene.add(molGroup);
 
@@ -354,29 +380,34 @@ export default function Molecules3DLab() {
       center.divideScalar(activeAtoms.length);
     }
 
-    // Build Atoms
-    activeAtoms.forEach((atom) => {
+    // Build Atoms with glossy CPK MeshPhysicalMaterial & record equilibrium coords for thermal vibration
+    const atomEntries: { mesh: THREE.Mesh; basePos: THREE.Vector3; phase: number }[] = [];
+    activeAtoms.forEach((atom, idx) => {
       const spec = ELEMENT_PROPS[atom.el];
       const radius = displayStyle === 'space-fill' ? spec.radius * 2.15 : spec.radius;
       const mesh = new THREE.Mesh(
-        new THREE.SphereGeometry(radius, 28, 22),
-        new THREE.MeshStandardMaterial({
+        new THREE.SphereGeometry(radius, 32, 24),
+        new THREE.MeshPhysicalMaterial({
           color: spec.hex,
-          roughness: 0.25,
-          metalness: 0.12,
+          roughness: 0.16,
+          metalness: 0.08,
+          clearcoat: 0.78,
+          clearcoatRoughness: 0.12,
         })
       );
-      mesh.position.set(atom.pos[0] - center.x, atom.pos[1] - center.y, atom.pos[2] - center.z);
+      const basePos = new THREE.Vector3(atom.pos[0] - center.x, atom.pos[1] - center.y, atom.pos[2] - center.z);
+      mesh.position.copy(basePos);
       molGroup.add(mesh);
+      atomEntries.push({ mesh, basePos, phase: idx * 1.45 });
     });
 
-    // Build Covalent Bonds
+    // Build Covalent Bonds & Polarity Dipole Arrows
     if (displayStyle === 'ball-stick') {
       const up = new THREE.Vector3(0, 1, 0);
       const bondMat = new THREE.MeshStandardMaterial({
         color: 0x94a3b8,
-        roughness: 0.35,
-        metalness: 0.35,
+        roughness: 0.28,
+        metalness: 0.45,
       });
 
       activeBonds.forEach((bond) => {
@@ -391,11 +422,12 @@ export default function Molecules3DLab() {
         if (dist < 0.01) return;
 
         const mid = new THREE.Vector3().addVectors(pA, pB).multiplyScalar(0.5);
-        const quat = new THREE.Quaternion().setFromUnitVectors(up, dir.clone().normalize());
+        const dirNorm = dir.clone().normalize();
+        const quat = new THREE.Quaternion().setFromUnitVectors(up, dirNorm);
 
         // Orthogonal offset axis for double / triple bonds
         const perp = new THREE.Vector3(0, 0, 1);
-        if (Math.abs(dir.clone().normalize().dot(perp)) > 0.9) {
+        if (Math.abs(dirNorm.dot(perp)) > 0.9) {
           perp.set(1, 0, 0);
         }
         perp.crossVectors(dir, perp).normalize();
@@ -406,24 +438,52 @@ export default function Molecules3DLab() {
 
         offsets.forEach((off) => {
           const stick = new THREE.Mesh(
-            new THREE.CylinderGeometry(stickRadius, stickRadius, dist, 12),
+            new THREE.CylinderGeometry(stickRadius, stickRadius, dist, 14),
             bondMat
           );
           stick.quaternion.copy(quat);
           stick.position.copy(mid).addScaledVector(perp, off);
           molGroup.add(stick);
         });
+
+        // Bond Dipole Arrow (delta+ -> delta-) when electronegativity diff >= 0.4
+        if (showDipoles) {
+          const enA = ELECTRONEGATIVITY[nodeA.el];
+          const enB = ELECTRONEGATIVITY[nodeB.el];
+          const diff = enB - enA;
+          if (Math.abs(diff) >= 0.4) {
+            const arrowDir = diff > 0 ? dirNorm : dirNorm.clone().negate();
+            const origin = mid.clone().addScaledVector(arrowDir, -dist * 0.28).addScaledVector(perp, 0.22);
+            const arrow = new THREE.ArrowHelper(arrowDir, origin, dist * 0.56, 0x38bdf8, 0.18, 0.11);
+            molGroup.add(arrow);
+          }
+        }
       });
     }
 
     const clock = new THREE.Clock();
     let mounted = true;
+    let vibElapsed = 0;
     const tick = () => {
       if (!mounted) return;
       const dt = Math.min(clock.getDelta(), 0.08);
+      vibElapsed += dt;
       if (autoRotateRef.current) {
         molGroup.rotation.y += dt * 0.45;
       }
+
+      // Thermal molecular bond vibration amplitude scales with sqrt(T / 300)
+      const vibAmp = Math.max(0, (tempKRef.current - 50) / 850) * 0.038;
+      const vibFreq = 12 + (tempKRef.current / 900) * 18;
+      for (let i = 0; i < atomEntries.length; i++) {
+        const entry = atomEntries[i];
+        entry.mesh.position.set(
+          entry.basePos.x + Math.sin(vibElapsed * vibFreq + entry.phase) * vibAmp,
+          entry.basePos.y + Math.cos(vibElapsed * (vibFreq * 1.15) + entry.phase) * vibAmp,
+          entry.basePos.z + Math.sin(vibElapsed * (vibFreq * 0.85) + entry.phase * 1.7) * vibAmp
+        );
+      }
+
       controls.update();
       renderer.render(scene, camera);
       afterDraw(tick);
@@ -432,10 +492,11 @@ export default function Molecules3DLab() {
 
     return () => {
       mounted = false;
+      captureSnapshotRef.current = null;
       disposeObject3D(molGroup);
       dispose();
     };
-  }, [activeAtoms, activeBonds, displayStyle]);
+  }, [activeAtoms, activeBonds, displayStyle, showDipoles]);
 
   const handleAddCustomAtom = () => {
     if (customAtoms.length >= 16) return;
@@ -452,6 +513,7 @@ export default function Molecules3DLab() {
     setCustomAtoms((prev) => [...prev, { el: addElement, pos: nextPos }]);
     setCustomBonds((prev) => [...prev, { a: parentIdx, b: newIndex, order: bondOrder }]);
     setAttachToIndex(newIndex);
+    recordStep(`Bonded ${addElement} atom (order ${bondOrder}) onto atom #${parentIdx + 1} in custom molecule.`);
   };
 
   return (
@@ -511,7 +573,10 @@ export default function Molecules3DLab() {
                 <button
                   key={m.id}
                   type="button"
-                  onClick={() => setSelectedId(m.id)}
+                  onClick={() => {
+                    setSelectedId(m.id);
+                    recordStep(`Selected ${m.name} (${m.formula}) — ${m.geometry}, bond angle ${m.bondAngle}.`);
+                  }}
                   className={cn(
                     'w-full text-left p-3 rounded-xl border transition-all flex items-center justify-between',
                     selectedId === m.id
@@ -628,14 +693,24 @@ export default function Molecules3DLab() {
             )}
 
             <div className="absolute bottom-3 left-3 right-3 flex flex-wrap items-center justify-between gap-2 pointer-events-none">
-              <div className="pointer-events-auto flex items-center gap-1.5 bg-slate-950/90 border border-white/15 rounded-xl p-1.5">
+              <div className="pointer-events-auto flex flex-wrap items-center gap-1.5 bg-slate-950/90 border border-white/15 rounded-xl p-1.5">
                 <button
                   type="button"
                   onClick={() => setAutoRotate((r) => !r)}
                   className="px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-100 hover:bg-white/10 flex items-center gap-1.5"
                 >
                   {autoRotate ? <Pause size={13} /> : <Play size={13} />}
-                  <span>{autoRotate ? 'Pause Spin' : 'Auto Spin'}</span>
+                  <span>{autoRotate ? 'Pause Spin' : 'Spin'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowDipoles((d) => !d)}
+                  className={cn(
+                    'px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors',
+                    showDipoles ? 'bg-sky-500/20 text-sky-300' : 'text-slate-300 hover:bg-white/10'
+                  )}
+                >
+                  <span>Dipoles</span>
                 </button>
                 <button
                   type="button"
@@ -646,8 +721,19 @@ export default function Molecules3DLab() {
                   <span>{displayStyle === 'ball-stick' ? 'Ball & Stick' : 'Space-Fill'}</span>
                 </button>
               </div>
-              <div className="px-3 py-1.5 rounded-xl bg-slate-950/90 border border-white/15 text-[11px] font-mono text-slate-300">
-                CPK Standard · Drag to Orbit · Scroll to Zoom
+              <div className="pointer-events-auto flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-950/90 border border-white/15 text-[11px] font-mono text-slate-200">
+                <Flame size={12} className="text-amber-400" />
+                <span>{temperatureK} K</span>
+                <input
+                  type="range"
+                  min={50}
+                  max={900}
+                  step={10}
+                  value={temperatureK}
+                  onChange={(e) => setTemperatureK(Number(e.target.value))}
+                  className="w-20 accent-amber-400"
+                  aria-label="Thermal vibration temperature Kelvin"
+                />
               </div>
             </div>
           </div>
@@ -675,28 +761,57 @@ export default function Molecules3DLab() {
                   : activePreset.description}
               </p>
             </div>
-            {canSave && (
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              {canSave && (
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() =>
+                    saveResult({
+                      experimentTitle: customMode
+                        ? `Custom Molecule ${customFormula}`
+                        : `${activePreset.name} (${activePreset.formula}) 3D Analysis`,
+                      outcome: customMode
+                        ? `Built custom 3D molecule ${customFormula} (${molarMass} g/mol)`
+                        : `${activePreset.geometry}, bond angle ${activePreset.bondAngle}, ${activePreset.polarity}`,
+                      formula: customFormula,
+                      measurements: `Molar mass: ${molarMass} g/mol | Atoms: ${activeAtoms.length} | Temp: ${temperatureK} K`,
+                    })
+                  }
+                  className="px-3.5 py-2 rounded-xl bg-primary text-primary-foreground text-xs font-semibold flex items-center gap-1.5 hover:opacity-90 disabled:opacity-50 whitespace-nowrap"
+                >
+                  <Save size={14} />
+                  <span>{saving ? 'Saving...' : 'Save Lab'}</span>
+                </button>
+              )}
               <button
                 type="button"
-                disabled={saving}
                 onClick={() =>
-                  saveResult({
+                  downloadPdfReport({
                     experimentTitle: customMode
                       ? `Custom Molecule ${customFormula}`
                       : `${activePreset.name} (${activePreset.formula}) 3D Analysis`,
                     outcome: customMode
-                      ? `Built custom 3D molecule ${customFormula} (${molarMass} g/mol)`
-                      : `${activePreset.geometry}, bond angle ${activePreset.bondAngle}, ${activePreset.polarity}`,
+                      ? `Constructed custom 3D covalent molecule ${customFormula} (${molarMass} g/mol) with ${customBonds.length} covalent bonds.`
+                      : `${activePreset.geometry} geometry, bond angle ${activePreset.bondAngle}, ${activePreset.hybridization} hybridization (${activePreset.polarity}). ${activePreset.description}`,
                     formula: customFormula,
-                    measurements: `Molar mass: ${molarMass} g/mol | Atoms: ${activeAtoms.length}`,
+                    measurements: `Molar mass: ${molarMass} g/mol | Atoms: ${activeAtoms.length} | Thermal kinetic temp: ${temperatureK} K | Style: ${displayStyle}`,
+                    stepsTaken:
+                      recordedSteps.length > 0
+                        ? recordedSteps
+                        : [
+                            `Loaded ${customMode ? `custom molecule ${customFormula}` : `${activePreset.name} (${activePreset.formula})`} in 3D VSEPR viewport.`,
+                            `Observed bond polarity dipoles and thermal vibration at ${temperatureK} K.`,
+                          ],
+                    snapshotDataUrl: captureSnapshotRef.current?.() || undefined,
                   })
                 }
-                className="px-4 py-2 rounded-xl bg-primary text-primary-foreground text-xs font-semibold flex items-center gap-2 hover:opacity-90 disabled:opacity-50 whitespace-nowrap shrink-0"
+                className="px-3.5 py-2 rounded-xl bg-emerald-600 text-white text-xs font-semibold flex items-center gap-1.5 hover:bg-emerald-500 whitespace-nowrap"
               >
-                <Save size={14} />
-                <span>{saving ? 'Saving...' : 'Save Molecule'}</span>
+                <FileDown size={14} />
+                <span>PDF Report</span>
               </button>
-            )}
+            </div>
           </div>
           {feedback && (
             <p className="text-xs font-medium text-emerald-600 dark:text-emerald-400">

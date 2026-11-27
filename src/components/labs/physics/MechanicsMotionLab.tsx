@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Pause, Play, RotateCcw, Save } from 'lucide-react';
+import { FileDown, Pause, Play, RotateCcw, Save } from 'lucide-react';
 import { useSaveLabResult } from '../useSaveLabResult';
 import { cn } from '../../../lib/utils';
 
@@ -26,7 +26,7 @@ export default function MechanicsMotionLab() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const tRef = useRef<number>(0);
 
-  const { saveResult, saving, feedback, canSave } = useSaveLabResult('physics');
+  const { saveResult, downloadPdfReport, saving, feedback, canSave } = useSaveLabResult('physics');
 
   // Derived Projectile Metrics
   const rad = (launchAngle * Math.PI) / 180;
@@ -439,34 +439,82 @@ export default function MechanicsMotionLab() {
             </div>
           )}
 
-          {canSave && (
+          <div className="flex flex-wrap gap-2">
+            {canSave && (
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() =>
+                  saveResult({
+                    experimentTitle: `Mechanics Simulation (${mode})`,
+                    outcome:
+                      mode === 'projectile'
+                        ? `Range ${range.toFixed(1)} m, max height ${maxHeight.toFixed(1)} m at ${launchAngle}°`
+                        : mode === 'incline'
+                          ? `Slope ${slopeDeg}° (μ=${frictionMu}), acceleration ${netAccel.toFixed(2)} m/s²`
+                          : `Pendulum L=${pendulumLen} m achieved period T=${pendulumPeriod.toFixed(2)} s`,
+                    formula:
+                      mode === 'projectile'
+                        ? 'R = v₀² sin(2θ) / g'
+                        : mode === 'incline'
+                          ? 'a = g(sin θ − μ cos θ)'
+                          : 'T = 2π√(L/g)',
+                    measurements: `g = ${gravity} m/s²`,
+                  })
+                }
+                className="flex-1 py-2 px-3 rounded-xl bg-primary text-primary-foreground text-xs font-semibold flex items-center justify-center gap-1.5 hover:opacity-90 whitespace-nowrap"
+              >
+                <Save size={14} />
+                <span>{saving ? 'Saving...' : 'Save Lab'}</span>
+              </button>
+            )}
             <button
               type="button"
-              disabled={saving}
-              onClick={() =>
-                saveResult({
+              onClick={() => {
+                let snapshotDataUrl: string | undefined;
+                try {
+                  snapshotDataUrl = canvasRef.current?.toDataURL('image/png');
+                } catch {
+                  snapshotDataUrl = undefined;
+                }
+                downloadPdfReport({
                   experimentTitle: `Mechanics Simulation (${mode})`,
                   outcome:
                     mode === 'projectile'
-                      ? `Range ${range.toFixed(1)} m, max height ${maxHeight.toFixed(1)} m at ${launchAngle}°`
+                      ? `Projectile launched at ${launchSpeed} m/s (${launchAngle}°) under g=${gravity} m/s² reached horizontal range ${range.toFixed(1)} m and peak height ${maxHeight.toFixed(1)} m.`
                       : mode === 'incline'
-                        ? `Slope ${slopeDeg}° (μ=${frictionMu}), acceleration ${netAccel.toFixed(2)} m/s²`
-                        : `Pendulum L=${pendulumLen} m achieved period T=${pendulumPeriod.toFixed(2)} s`,
+                        ? `Block on ${slopeDeg}° inclined plane (μ=${frictionMu.toFixed(2)}, g=${gravity} m/s²) exhibited net acceleration ${netAccel.toFixed(2)} m/s².`
+                        : `Harmonic pendulum of length ${pendulumLen} m at ${pendulumAmpDeg}° under g=${gravity} m/s² oscillated with period T=${pendulumPeriod.toFixed(2)} s.`,
                   formula:
                     mode === 'projectile'
                       ? 'R = v₀² sin(2θ) / g'
                       : mode === 'incline'
                         ? 'a = g(sin θ − μ cos θ)'
                         : 'T = 2π√(L/g)',
-                  measurements: `g = ${gravity} m/s²`,
-                })
-              }
-              className="w-full py-2 rounded-xl bg-primary text-primary-foreground text-xs font-semibold flex items-center justify-center gap-2 hover:opacity-90"
+                  measurements:
+                    mode === 'projectile'
+                      ? `v₀=${launchSpeed} m/s | θ=${launchAngle}° | Range=${range.toFixed(1)} m | H_max=${maxHeight.toFixed(1)} m | Flight=${flightTime.toFixed(2)} s | g=${gravity} m/s²`
+                      : mode === 'incline'
+                        ? `Slope=${slopeDeg}° | μ=${frictionMu.toFixed(2)} | N=${normalForce.toFixed(1)} N | f_k=${frictionForce.toFixed(1)} N | a=${netAccel.toFixed(2)} m/s²`
+                        : `Length L=${pendulumLen} m | Amplitude=${pendulumAmpDeg}° | Period T=${pendulumPeriod.toFixed(2)} s | g=${gravity} m/s²`,
+                  stepsTaken: [
+                    `Selected ${mode} kinematics simulation with gravity g = ${gravity.toFixed(2)} m/s².`,
+                    mode === 'projectile'
+                      ? `Configured launch speed v₀=${launchSpeed} m/s and angle θ=${launchAngle}°.`
+                      : mode === 'incline'
+                        ? `Set ramp angle ${slopeDeg}° and friction coefficient μ=${frictionMu.toFixed(2)}.`
+                        : `Adjusted pendulum string length L=${pendulumLen} m and release angle ${pendulumAmpDeg}°.`,
+                    `Ran real-time kinematic vector simulation and recorded equilibrium/trajectory metrics.`,
+                  ],
+                  snapshotDataUrl,
+                });
+              }}
+              className="flex-1 py-2 px-3 rounded-xl bg-emerald-600 text-white text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-emerald-500 whitespace-nowrap"
             >
-              <Save size={14} />
-              <span>{saving ? 'Saving...' : 'Save Mechanics Run'}</span>
+              <FileDown size={14} />
+              <span>PDF Report</span>
             </button>
-          )}
+          </div>
           {feedback && <p className="text-xs text-emerald-600 dark:text-emerald-400">{feedback.text}</p>}
         </div>
       </div>

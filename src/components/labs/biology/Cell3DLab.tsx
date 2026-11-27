@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import {
   CheckCircle2,
   Eye,
+  FileDown,
   Layers,
   Pause,
   Play,
@@ -13,6 +14,80 @@ import {
 import { createThreeViewport, disposeObject3D } from '../threeHelpers';
 import { useSaveLabResult } from '../useSaveLabResult';
 import { cn } from '../../../lib/utils';
+
+// Module-scope scratch math objects (zero GC in animation loop)
+const _cellDummy = new THREE.Object3D();
+const _cellTarget = new THREE.Vector3();
+
+function createNuclearPoreTexture(): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  if (ctx) {
+    const grad = ctx.createLinearGradient(0, 0, 256, 128);
+    grad.addColorStop(0, '#6d28d9');
+    grad.addColorStop(0.5, '#7c3aed');
+    grad.addColorStop(1, '#5b21b6');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 256, 128);
+
+    // Chromatin fiber wisps
+    ctx.strokeStyle = 'rgba(221, 214, 254, 0.25)';
+    ctx.lineWidth = 1.6;
+    for (let i = 0; i < 22; i++) {
+      ctx.beginPath();
+      const sx = (i * 37) % 256;
+      const sy = (i * 23) % 128;
+      ctx.moveTo(sx, sy);
+      ctx.quadraticCurveTo((sx + 28) % 256, (sy + 18) % 128, (sx + 52) % 256, (sy - 12 + 128) % 128);
+      ctx.stroke();
+    }
+
+    // Nuclear pore complexes
+    for (let i = 0; i < 65; i++) {
+      const px = ((i * 53 + 17) % 244) + 6;
+      const py = ((i * 31 + 11) % 116) + 6;
+      ctx.fillStyle = '#2e1065';
+      ctx.beginPath();
+      ctx.arc(px, py, 2.4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#c4b5fd';
+      ctx.lineWidth = 0.9;
+      ctx.stroke();
+    }
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+
+function createLipidBumpTexture(): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 128;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  if (ctx) {
+    ctx.fillStyle = '#808080';
+    ctx.fillRect(0, 0, 128, 128);
+    for (let y = 0; y < 128; y += 8) {
+      for (let x = 0; x < 128; x += 8) {
+        const shade = ((x * 7 + y * 13) % 45) + 110;
+        ctx.fillStyle = `rgb(${shade},${shade},${shade})`;
+        ctx.beginPath();
+        ctx.arc(x + 4, y + 4, 2.8, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(6, 4);
+  return tex;
+}
 
 type CellKind = 'animal' | 'plant' | 'bacterial';
 
@@ -188,10 +263,19 @@ export default function Cell3DLab() {
   const [webglUnavailable, setWebglUnavailable] = useState<boolean>(false);
 
   const mountRef = useRef<HTMLDivElement>(null);
+  const captureSnapshotRef = useRef<(() => string | null) | null>(null);
   const stateRef = useRef({ cutaway, explode, playing, selectedId });
   stateRef.current = { cutaway, explode, playing, selectedId };
 
-  const { saveResult, saving, feedback, canSave } = useSaveLabResult('biology');
+  const {
+    saveResult,
+    downloadPdfReport,
+    recordStep,
+    recordedSteps,
+    saving,
+    feedback,
+    canSave,
+  } = useSaveLabResult('biology');
 
   const visibleOrganelles = useMemo(
     () => ORGANELLES.filter((o) => o.presentIn.includes(cellKind)),
@@ -202,6 +286,10 @@ export default function Cell3DLab() {
     () => visibleOrganelles.find((o) => o.id === selectedId) ?? visibleOrganelles[0],
     [visibleOrganelles, selectedId]
   );
+
+  useEffect(() => {
+    recordStep(`Loaded ${CELL_TITLES[cellKind].label} 3D interactive model.`);
+  }, [cellKind, recordStep]);
 
   useEffect(() => {
     if (!visibleOrganelles.some((o) => o.id === selectedId)) {
@@ -227,10 +315,13 @@ export default function Cell3DLab() {
     }
 
     setWebglUnavailable(false);
-    const { scene, camera, renderer, controls, afterDraw, dispose } = ctx;
+    const { scene, camera, renderer, controls, afterDraw, captureSnapshot, dispose } = ctx;
+    captureSnapshotRef.current = captureSnapshot;
 
     const cellGroup = new THREE.Group();
     scene.add(cellGroup);
+    const nuclearTex = createNuclearPoreTexture();
+    const membraneBump = createLipidBumpTexture();
 
     const clickableMeshes: THREE.Object3D[] = [];
     const organelleGroups = new Map<string, { group: THREE.Group; basePos: THREE.Vector3; explodeDir: THREE.Vector3 }>();
@@ -263,16 +354,21 @@ export default function Cell3DLab() {
         opacity: opts?.opacity ?? 1,
       });
 
-    // Outer Cell Membrane / Wall
+    // Outer Cell Membrane / Wall with hydrated bilayer PBR sheen
     if (cellKind === 'animal') {
-      const geo = new THREE.SphereGeometry(2.3, 40, 28);
+      const geo = new THREE.SphereGeometry(2.3, 44, 32);
       geo.scale(1.08, 0.92, 1.0);
       shellMesh = new THREE.Mesh(
         geo,
         new THREE.MeshPhysicalMaterial({
           color: 0x38bdf8,
-          roughness: 0.2,
+          roughness: 0.16,
           metalness: 0.0,
+          clearcoat: 0.85,
+          clearcoatRoughness: 0.14,
+          iridescence: 0.32,
+          bumpMap: membraneBump,
+          bumpScale: 0.015,
           transparent: true,
           opacity: 0.22,
           side: THREE.DoubleSide,
@@ -335,15 +431,32 @@ export default function Cell3DLab() {
       cellGroup.add(wallMesh);
     }
 
+    let cristaeCores: THREE.Mesh[] = [];
+    let flagellumGroupRef: THREE.Group | null = null;
+
     // Eukaryotic Organelles
     if (cellKind === 'animal' || cellKind === 'plant') {
-      // Nucleus
+      // Nucleus with perforated nuclear envelope texture & glowing nucleolus
       const nucGroup = new THREE.Group();
       const nucSphere = new THREE.Mesh(
-        new THREE.SphereGeometry(0.72, 28, 22),
-        makeMat(0x8b5cf6, { roughness: 0.3, opacity: 0.85 })
+        new THREE.SphereGeometry(0.72, 32, 24),
+        new THREE.MeshPhysicalMaterial({
+          map: nuclearTex,
+          roughness: 0.32,
+          clearcoat: 0.45,
+          transparent: true,
+          opacity: 0.86,
+        })
       );
-      const nucleolus = new THREE.Mesh(new THREE.SphereGeometry(0.26, 20, 16), makeMat(0x5b21b6));
+      const nucleolus = new THREE.Mesh(
+        new THREE.SphereGeometry(0.26, 22, 18),
+        new THREE.MeshStandardMaterial({
+          color: 0x5b21b6,
+          emissive: 0x7c3aed,
+          emissiveIntensity: 0.35,
+          roughness: 0.35,
+        })
+      );
       nucGroup.add(nucSphere, nucleolus);
       registerOrganelle(
         'nucleus',
@@ -356,8 +469,8 @@ export default function Cell3DLab() {
       const erGroup = new THREE.Group();
       for (let i = 0; i < 4; i++) {
         const torus = new THREE.Mesh(
-          new THREE.TorusGeometry(0.92 + i * 0.14, 0.055, 10, 28, Math.PI * 0.85),
-          makeMat(0x38bdf8)
+          new THREE.TorusGeometry(0.92 + i * 0.14, 0.055, 12, 32, Math.PI * 0.85),
+          makeMat(0x38bdf8, { roughness: 0.28 })
         );
         torus.rotation.set(0.4 * i, 0.3 * i, -0.5);
         erGroup.add(torus);
@@ -369,16 +482,38 @@ export default function Cell3DLab() {
         new THREE.Vector3(1.1, 0.7, 0.8)
       );
 
-      // Mitochondria (2 capsules with cristae stripes)
+      // Mitochondria: translucent outer envelope + folded inner cristae core
       const mitoGroup = new THREE.Group();
       [
         [1.15, -0.45, 0.5, 0.4],
         [-1.15, -0.55, -0.5, -0.6],
       ].forEach(([x, y, z, rz]) => {
-        const m = new THREE.Mesh(new THREE.CapsuleGeometry(0.2, 0.45, 10, 18), makeMat(0xef4444));
-        m.position.set(x, y, z);
-        m.rotation.set(0.3, 0.2, rz);
-        mitoGroup.add(m);
+        const unit = new THREE.Group();
+        unit.position.set(x, y, z);
+        unit.rotation.set(0.3, 0.2, rz);
+        const outer = new THREE.Mesh(
+          new THREE.CapsuleGeometry(0.21, 0.46, 12, 20),
+          new THREE.MeshPhysicalMaterial({
+            color: 0xef4444,
+            roughness: 0.24,
+            clearcoat: 0.65,
+            transparent: true,
+            opacity: 0.68,
+          })
+        );
+        const cristae = new THREE.Mesh(
+          new THREE.TorusKnotGeometry(0.11, 0.032, 48, 8, 2, 3),
+          new THREE.MeshStandardMaterial({
+            color: 0xfca5a5,
+            emissive: 0xf97316,
+            emissiveIntensity: 0.45,
+            roughness: 0.3,
+          })
+        );
+        cristae.scale.set(1.0, 2.0, 0.9);
+        cristaeCores.push(cristae);
+        unit.add(outer, cristae);
+        mitoGroup.add(unit);
       });
       registerOrganelle('mitochondria', mitoGroup, new THREE.Vector3(0, 0, 0), new THREE.Vector3(1.3, -0.8, 0.6));
 
@@ -446,17 +581,32 @@ export default function Cell3DLab() {
       vacGroup.add(vac);
       registerOrganelle('vacuole', vacGroup, new THREE.Vector3(0.65, -0.15, -0.15), new THREE.Vector3(1.2, 0.2, -0.8));
 
-      // Chloroplasts
+      // Chloroplasts with stacked thylakoid grana discs inside translucent stroma
       const chloroGroup = new THREE.Group();
+      const stromaMat = new THREE.MeshPhysicalMaterial({
+        color: 0x22c55e,
+        roughness: 0.22,
+        clearcoat: 0.6,
+        transparent: true,
+        opacity: 0.66,
+      });
+      const granaMat = makeMat(0x14532d, { roughness: 0.35 });
       [
         [-1.35, -0.8, 0.6],
         [1.25, 0.85, 0.5],
         [-0.2, -1.05, -0.85],
       ].forEach(([x, y, z]) => {
-        const ch = new THREE.Mesh(new THREE.CapsuleGeometry(0.2, 0.42, 10, 16), makeMat(0x22c55e));
-        ch.position.set(x, y, z);
-        ch.rotation.set(0.4, 0.7, 0.3);
-        chloroGroup.add(ch);
+        const unit = new THREE.Group();
+        unit.position.set(x, y, z);
+        unit.rotation.set(0.4, 0.7, 0.3);
+        const ch = new THREE.Mesh(new THREE.CapsuleGeometry(0.21, 0.44, 10, 16), stromaMat);
+        unit.add(ch);
+        for (let g = -1; g <= 1; g++) {
+          const granum = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.11, 0.08, 12), granaMat);
+          granum.position.y = g * 0.14;
+          unit.add(granum);
+        }
+        chloroGroup.add(unit);
       });
       registerOrganelle('chloroplast', chloroGroup, new THREE.Vector3(0, 0, 0), new THREE.Vector3(-1.2, -1.0, 0.7));
     }
@@ -487,18 +637,32 @@ export default function Cell3DLab() {
       }
       registerOrganelle('ribosomes', riboGroup, new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, -1.0, 0.8));
 
-      // Flagellum helical tail
+      // Flagellum helical tail (rotary motor propeller)
       const flagGroup = new THREE.Group();
       const pts: THREE.Vector3[] = [];
-      for (let i = 0; i <= 32; i++) {
-        const t = i / 32;
-        pts.push(new THREE.Vector3(-2.3 - t * 2.4, Math.sin(t * Math.PI * 4) * 0.3, Math.cos(t * Math.PI * 4) * 0.3));
+      for (let i = 0; i <= 36; i++) {
+        const t = i / 36;
+        pts.push(new THREE.Vector3(-2.3 - t * 2.5, Math.sin(t * Math.PI * 4.5) * 0.28, Math.cos(t * Math.PI * 4.5) * 0.28));
       }
       const curve = new THREE.CatmullRomCurve3(pts);
-      const flagMesh = new THREE.Mesh(new THREE.TubeGeometry(curve, 32, 0.05, 8, false), makeMat(0x14b8a6));
+      const flagMesh = new THREE.Mesh(new THREE.TubeGeometry(curve, 36, 0.052, 8, false), makeMat(0x14b8a6));
       flagGroup.add(flagMesh);
+      flagellumGroupRef = flagGroup;
       registerOrganelle('flagellum', flagGroup, new THREE.Vector3(0, 0, 0), new THREE.Vector3(-1.3, 0, 0));
     }
+
+    // 24 Streaming Cytoplasmic Vesicles & ATP Carriers (InstancedMesh, zero GC)
+    const VESICLE_COUNT = 24;
+    const vesicleGeo = new THREE.SphereGeometry(0.042, 10, 8);
+    const vesicleMat = new THREE.MeshStandardMaterial({
+      color: 0xfde047,
+      emissive: 0xf59e0b,
+      emissiveIntensity: 0.7,
+      roughness: 0.2,
+    });
+    const vesicleCloud = new THREE.InstancedMesh(vesicleGeo, vesicleMat, VESICLE_COUNT);
+    vesicleCloud.frustumCulled = false;
+    cellGroup.add(vesicleCloud);
 
     // Click Raycaster
     const raycaster = new THREE.Raycaster();
@@ -511,13 +675,20 @@ export default function Cell3DLab() {
       const hits = raycaster.intersectObjects(clickableMeshes, false);
       if (hits.length > 0) {
         const orgId = hits[0].object.userData.organelleId as string | undefined;
-        if (orgId) setSelectedId(orgId);
+        if (orgId) {
+          setSelectedId(orgId);
+          const match = ORGANELLES.find((o) => o.id === orgId);
+          if (match) {
+            recordStep(`Inspected ${match.name} in 3D ${CELL_TITLES[cellKind].label}.`);
+          }
+        }
       }
     };
     renderer.domElement.addEventListener('click', handleClick);
 
     const clock = new THREE.Clock();
     let mounted = true;
+    let elapsed = 0;
 
     const tick = () => {
       if (!mounted) return;
@@ -525,8 +696,38 @@ export default function Cell3DLab() {
       const { cutaway: cw, explode: ex, playing: pl, selectedId: sel } = stateRef.current;
 
       if (pl) {
-        cellGroup.rotation.y += dt * 0.25;
+        elapsed += dt;
+        cellGroup.rotation.y += dt * 0.22;
+
+        // Mitochondria cristae ATP energy pulse
+        for (let i = 0; i < cristaeCores.length; i++) {
+          const mat = cristaeCores[i].material as THREE.MeshStandardMaterial;
+          mat.emissiveIntensity = 0.35 + 0.35 * (0.5 + 0.5 * Math.sin(elapsed * 3.4 + i * 1.4));
+        }
+
+        // Bacterial flagellum corkscrew rotation
+        if (flagellumGroupRef) {
+          flagellumGroupRef.rotation.x = elapsed * 5.2;
+        }
       }
+
+      // Cytoplasmic vesicle / ATP transport cyclosis stream
+      const rxBase = cellKind === 'bacterial' ? 1.55 : 1.75;
+      const ryBase = cellKind === 'bacterial' ? 0.62 : 1.05;
+      for (let i = 0; i < VESICLE_COUNT; i++) {
+        const phase = (i / VESICLE_COUNT) * Math.PI * 2 + elapsed * (0.42 + (i % 3) * 0.12);
+        const radial = 0.55 + ((i * 7) % 10) * 0.042;
+        _cellDummy.position.set(
+          Math.cos(phase) * rxBase * radial,
+          Math.sin(phase * 1.3 + i) * ryBase * 0.58,
+          Math.sin(phase) * 1.2 * radial
+        );
+        const pulse = 0.8 + 0.3 * Math.sin(elapsed * 3 + i);
+        _cellDummy.scale.setScalar(pulse);
+        _cellDummy.updateMatrix();
+        vesicleCloud.setMatrixAt(i, _cellDummy.matrix);
+      }
+      vesicleCloud.instanceMatrix.needsUpdate = true;
 
       if (shellMesh) {
         const m = shellMesh.material as THREE.MeshPhysicalMaterial;
@@ -537,15 +738,18 @@ export default function Cell3DLab() {
         m.opacity = cw ? 0.18 : 0.45;
       }
 
+      const dampAlpha = 1 - Math.exp(-8 * dt);
       organelleGroups.forEach(({ group, basePos, explodeDir }, id) => {
-        const target = basePos.clone().addScaledVector(explodeDir, ex);
-        group.position.lerp(target, 0.12);
+        _cellTarget.copy(basePos).addScaledVector(explodeDir, ex);
+        group.position.lerp(_cellTarget, dampAlpha);
         const isSel = id === sel;
         group.traverse((child) => {
           const mesh = child as THREE.Mesh;
           if (mesh.isMesh && mesh.material instanceof THREE.MeshStandardMaterial) {
-            mesh.material.emissive.setHex(isSel ? mesh.material.color.getHex() : 0x000000);
-            mesh.material.emissiveIntensity = isSel ? 0.45 : 0;
+            if (!cristaeCores.includes(mesh)) {
+              mesh.material.emissive.setHex(isSel ? mesh.material.color.getHex() : 0x000000);
+              mesh.material.emissiveIntensity = isSel ? 0.42 : 0;
+            }
           }
         });
       });
@@ -559,7 +763,10 @@ export default function Cell3DLab() {
 
     return () => {
       mounted = false;
+      captureSnapshotRef.current = null;
       renderer.domElement.removeEventListener('click', handleClick);
+      nuclearTex.dispose();
+      membraneBump.dispose();
       disposeObject3D(cellGroup);
       dispose();
     };
@@ -696,24 +903,49 @@ export default function Cell3DLab() {
                   {selectedOrganelle.details}
                 </p>
               </div>
-              {canSave && (
+              <div className="flex flex-wrap items-center gap-2 shrink-0 self-start sm:self-center">
+                {canSave && (
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={() =>
+                      saveResult({
+                        experimentTitle: `${CELL_TITLES[cellKind].label} Inspection`,
+                        outcome: `Inspected ${selectedOrganelle.name}: ${selectedOrganelle.role}`,
+                        measurements: `${visibleOrganelles.length} organelles mapped · Cutaway ${cutaway ? 'On' : 'Off'} · Explode ${Math.round(explode * 100)}%`,
+                        notes: selectedOrganelle.details,
+                      })
+                    }
+                    className="px-3.5 py-2 rounded-xl bg-primary text-primary-foreground text-xs font-semibold flex items-center gap-1.5 hover:opacity-90 disabled:opacity-50 whitespace-nowrap"
+                  >
+                    <Save size={14} />
+                    <span>{saving ? 'Saving...' : 'Save Lab'}</span>
+                  </button>
+                )}
                 <button
                   type="button"
-                  disabled={saving}
                   onClick={() =>
-                    saveResult({
+                    downloadPdfReport({
                       experimentTitle: `${CELL_TITLES[cellKind].label} Inspection`,
                       outcome: `Inspected ${selectedOrganelle.name}: ${selectedOrganelle.role}`,
-                      measurements: `${visibleOrganelles.length} organelles mapped`,
+                      measurements: `${visibleOrganelles.length} organelles mapped · Cutaway ${cutaway ? 'On' : 'Off'} · Explode ${Math.round(explode * 100)}%`,
                       notes: selectedOrganelle.details,
+                      stepsTaken:
+                        recordedSteps.length > 0
+                          ? recordedSteps
+                          : [
+                              `Opened ${CELL_TITLES[cellKind].label} 3D viewport.`,
+                              `Examined ${selectedOrganelle.name} (${selectedOrganelle.systemTag}).`,
+                            ],
+                      snapshotDataUrl: captureSnapshotRef.current?.() || undefined,
                     })
                   }
-                  className="px-4 py-2 rounded-xl bg-primary text-primary-foreground text-xs font-semibold flex items-center gap-2 hover:opacity-90 disabled:opacity-50 whitespace-nowrap shrink-0 self-start sm:self-center"
+                  className="px-3.5 py-2 rounded-xl bg-emerald-600 text-white text-xs font-semibold flex items-center gap-1.5 hover:bg-emerald-500 whitespace-nowrap"
                 >
-                  <Save size={14} />
-                  <span>{saving ? 'Saving...' : 'Save Observation'}</span>
+                  <FileDown size={14} />
+                  <span>PDF Report</span>
                 </button>
-              )}
+              </div>
             </div>
           )}
           {feedback && (
@@ -750,7 +982,10 @@ export default function Cell3DLab() {
                   <button
                     key={org.id}
                     type="button"
-                    onClick={() => setSelectedId(org.id)}
+                    onClick={() => {
+                      setSelectedId(org.id);
+                      recordStep(`Selected ${org.name} (${org.systemTag}) in organelle directory.`);
+                    }}
                     className={cn(
                       'w-full text-left p-3 rounded-xl border transition-all flex items-start gap-3',
                       active

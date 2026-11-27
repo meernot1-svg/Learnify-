@@ -22,6 +22,11 @@ export interface SpecimenBuildResult {
   updateAnimation: (elapsed: number, delta: number) => void;
 }
 
+// Module-scope scratch math helpers (zero GC inside animation loops)
+const _animDummy = new THREE.Object3D();
+const _animPt = new THREE.Vector3();
+const _animTan = new THREE.Vector3();
+
 // ---------- Procedural CanvasTexture Generators (Zero external assets) ----------
 
 function makeCanvas(w: number, h: number): [HTMLCanvasElement, CanvasRenderingContext2D] {
@@ -106,6 +111,39 @@ export function createBrainBumpTexture(maxAniso: number): THREE.CanvasTexture {
   const tex = new THREE.CanvasTexture(canvas);
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = maxAniso;
+  return tex;
+}
+
+export function createTissueMicroTexture(maxAniso: number, baseTone = '#8a8a8a'): THREE.CanvasTexture {
+  const [canvas, ctx] = makeCanvas(256, 256);
+  ctx.fillStyle = baseTone;
+  ctx.fillRect(0, 0, 256, 256);
+
+  // Subtle organic capillary web & cellular lobule relief
+  for (let i = 0; i < 64; i++) {
+    const x = (i * 61) % 256;
+    const y = (i * 109) % 256;
+    const r = 6 + (i % 5) * 4;
+    ctx.fillStyle = i % 2 === 0 ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.14)';
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+  ctx.lineWidth = 1.4;
+  for (let v = 0; v < 24; v++) {
+    const sx = (v * 37) % 256;
+    const sy = (v * 83) % 256;
+    ctx.beginPath();
+    ctx.moveTo(sx, sy);
+    ctx.quadraticCurveTo((sx + 28) % 256, (sy + 19) % 256, (sx + 54) % 256, (sy - 14 + 256) % 256);
+    ctx.stroke();
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(2, 2);
   tex.anisotropy = maxAniso;
   return tex;
 }
@@ -343,19 +381,22 @@ function buildHumanSpecimen(maxAniso: number): SpecimenBuildResult {
   addPedestal(root, reg, maxAniso, 1.5);
 
   const brainBump = createBrainBumpTexture(maxAniso);
-  reg.textures.push(brainBump);
+  const tissueBump = createTissueMicroTexture(maxAniso);
+  reg.textures.push(brainBump, tissueBump);
 
   // --- 1. Brain (Cerebrum hemispheres, cerebellum, brainstem) ---
   const brainGroup = new THREE.Group();
   brainGroup.position.set(0, 3.04, 0.02);
   const brainMat = new THREE.MeshPhysicalMaterial({
     color: 0xf4a28c,
-    roughness: 0.58,
+    roughness: 0.54,
     metalness: 0.0,
     bumpMap: brainBump,
-    bumpScale: 0.028,
-    clearcoat: 0.35,
-    clearcoatRoughness: 0.45,
+    bumpScale: 0.032,
+    clearcoat: 0.38,
+    clearcoatRoughness: 0.42,
+    sheen: 0.35,
+    sheenColor: new THREE.Color(0xfecdd3),
   });
   const leftHemi = new THREE.Mesh(new THREE.SphereGeometry(0.145, 24, 20), brainMat);
   leftHemi.scale.set(0.78, 0.92, 1.18);
@@ -369,7 +410,7 @@ function buildHumanSpecimen(maxAniso: number): SpecimenBuildResult {
       roughness: 0.72,
       metalness: 0.0,
       bumpMap: brainBump,
-      bumpScale: 0.02,
+      bumpScale: 0.022,
     })
   );
   cerebellum.scale.set(1.25, 0.72, 0.82);
@@ -389,17 +430,26 @@ function buildHumanSpecimen(maxAniso: number): SpecimenBuildResult {
   heartGroup.position.set(0.05, 2.21, 0.09);
   const heartMat = new THREE.MeshPhysicalMaterial({
     color: 0xc81e2b,
-    roughness: 0.38,
-    metalness: 0.05,
-    clearcoat: 0.55,
-    clearcoatRoughness: 0.25,
+    roughness: 0.34,
+    metalness: 0.04,
+    bumpMap: tissueBump,
+    bumpScale: 0.015,
+    clearcoat: 0.62,
+    clearcoatRoughness: 0.22,
+    sheen: 0.4,
+    sheenColor: new THREE.Color(0xfca5a5),
   });
   const ventricleCone = new THREE.Mesh(new THREE.SphereGeometry(0.115, 24, 20), heartMat);
   ventricleCone.scale.set(0.88, 1.18, 0.85);
   ventricleCone.rotation.z = 0.34;
   const rightAtrium = new THREE.Mesh(
     new THREE.SphereGeometry(0.065, 18, 16),
-    new THREE.MeshStandardMaterial({ color: 0x991b1b, roughness: 0.5, metalness: 0.05 })
+    new THREE.MeshPhysicalMaterial({
+      color: 0x991b1b,
+      roughness: 0.44,
+      metalness: 0.04,
+      clearcoat: 0.45,
+    })
   );
   rightAtrium.position.set(-0.065, 0.075, 0.01);
   const aortaCurve = new THREE.CatmullRomCurve3([
@@ -410,25 +460,29 @@ function buildHumanSpecimen(maxAniso: number): SpecimenBuildResult {
   ]);
   const aortaMesh = new THREE.Mesh(
     new THREE.TubeGeometry(aortaCurve, 20, 0.024, 10, false),
-    new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.42, metalness: 0.08 })
+    new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.38, metalness: 0.08 })
   );
   const venaCava = new THREE.Mesh(
     new THREE.CylinderGeometry(0.02, 0.02, 0.16, 12),
-    new THREE.MeshStandardMaterial({ color: 0x2563eb, roughness: 0.45, metalness: 0.05 })
+    new THREE.MeshStandardMaterial({ color: 0x2563eb, roughness: 0.42, metalness: 0.05 })
   );
   venaCava.position.set(-0.08, 0.11, -0.02);
   heartGroup.add(ventricleCone, rightAtrium, aortaMesh, venaCava);
   root.add(heartGroup);
   reg.registerPart('heart', heartGroup, new THREE.Vector3(0.55, 0.12, 0.72));
 
-  // --- 3. Lungs & Trachea ---
+  // --- 3. Lungs, Trachea & Muscular Diaphragm ---
   const lungsGroup = new THREE.Group();
   lungsGroup.position.set(0, 2.25, 0.01);
   const lungMat = new THREE.MeshPhysicalMaterial({
     color: 0xf47284,
-    roughness: 0.62,
+    roughness: 0.56,
     metalness: 0.0,
-    clearcoat: 0.2,
+    bumpMap: tissueBump,
+    bumpScale: 0.022,
+    clearcoat: 0.25,
+    sheen: 0.45,
+    sheenColor: new THREE.Color(0xfda4af),
   });
   const rightLung = new THREE.Mesh(new THREE.SphereGeometry(0.155, 22, 18), lungMat);
   rightLung.scale.set(0.84, 1.55, 0.92);
@@ -451,7 +505,14 @@ function buildHumanSpecimen(maxAniso: number): SpecimenBuildResult {
   bronchusRight.position.x = -0.07;
   bronchusRight.rotation.z = 0.78;
 
-  lungsGroup.add(rightLung, leftLung, tracheaTube, bronchusLeft, bronchusRight);
+  const diaphragmDome = new THREE.Mesh(
+    new THREE.SphereGeometry(0.32, 22, 12, 0, Math.PI * 2, 0, Math.PI * 0.42),
+    new THREE.MeshStandardMaterial({ color: 0xb91c1c, roughness: 0.55, side: THREE.DoubleSide })
+  );
+  diaphragmDome.scale.set(1.06, 0.38, 0.62);
+  diaphragmDome.position.set(0, -0.25, 0.02);
+
+  lungsGroup.add(rightLung, leftLung, tracheaTube, bronchusLeft, bronchusRight, diaphragmDome);
   for (let i = 0; i < 5; i++) {
     const ring = new THREE.Mesh(new THREE.TorusGeometry(0.031, 0.005, 8, 18), tracheaMat);
     ring.rotation.x = Math.PI / 2;
@@ -466,10 +527,12 @@ function buildHumanSpecimen(maxAniso: number): SpecimenBuildResult {
   liverGroup.position.set(-0.11, 1.9, 0.09);
   const liverMat = new THREE.MeshPhysicalMaterial({
     color: 0x7c2d12,
-    roughness: 0.34,
+    roughness: 0.32,
     metalness: 0.04,
-    clearcoat: 0.45,
-    clearcoatRoughness: 0.3,
+    bumpMap: tissueBump,
+    bumpScale: 0.012,
+    clearcoat: 0.5,
+    clearcoatRoughness: 0.28,
   });
   const mainLobe = new THREE.Mesh(new THREE.SphereGeometry(0.145, 22, 16), liverMat);
   mainLobe.scale.set(1.32, 0.75, 0.85);
@@ -698,6 +761,66 @@ function buildHumanSpecimen(maxAniso: number): SpecimenBuildResult {
   reg.shellMeshes.push(...(outerGroup.children as THREE.Mesh[]));
   reg.registerPart('outer_body', outerGroup, new THREE.Vector3(0, 0, -0.45));
 
+  // --- 10. Animated Systemic Blood Circulation & Spinal Action Potentials ---
+  const arterialCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0.05, 2.28, 0.09),
+    new THREE.Vector3(0.04, 2.52, 0.06),
+    new THREE.Vector3(0.01, 2.92, 0.02),
+    new THREE.Vector3(-0.02, 2.48, -0.04),
+    new THREE.Vector3(-0.02, 1.96, -0.03),
+    new THREE.Vector3(-0.04, 1.44, 0.0),
+    new THREE.Vector3(-0.15, 0.92, 0.01),
+  ]);
+  const venousCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0.15, 0.88, -0.01),
+    new THREE.Vector3(0.05, 1.42, -0.02),
+    new THREE.Vector3(0.04, 1.95, -0.01),
+    new THREE.Vector3(-0.03, 2.31, 0.06),
+    new THREE.Vector3(-0.18, 2.25, 0.01),
+    new THREE.Vector3(0.18, 2.25, 0.01),
+    new THREE.Vector3(0.05, 2.21, 0.09),
+  ]);
+  const neuralCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0, 3.04, 0.0),
+    new THREE.Vector3(0, 2.66, -0.11),
+    new THREE.Vector3(0, 2.12, -0.14),
+    new THREE.Vector3(0, 1.46, -0.13),
+  ]);
+
+  const rbcGeo = new THREE.SphereGeometry(0.016, 10, 8);
+  rbcGeo.scale(1.15, 0.65, 1.15);
+  const arterialCount = 24;
+  const arterialFlow = new THREE.InstancedMesh(
+    rbcGeo,
+    new THREE.MeshBasicMaterial({ color: 0xf43f5e }),
+    arterialCount
+  );
+  arterialFlow.frustumCulled = false;
+
+  const venousCount = 18;
+  const venousFlow = new THREE.InstancedMesh(
+    rbcGeo,
+    new THREE.MeshBasicMaterial({ color: 0x60a5fa }),
+    venousCount
+  );
+  venousFlow.frustumCulled = false;
+
+  const sparkGeo = new THREE.SphereGeometry(0.015, 10, 8);
+  const sparkCount = 7;
+  const neuralFlow = new THREE.InstancedMesh(
+    sparkGeo,
+    new THREE.MeshBasicMaterial({ color: 0xfacc15 }),
+    sparkCount
+  );
+  neuralFlow.frustumCulled = false;
+
+  // Subtle vessel guide filament so blood stream path is clear in X-Ray mode
+  const vesselGuide = new THREE.Mesh(
+    new THREE.TubeGeometry(arterialCurve, 36, 0.006, 6, false),
+    new THREE.MeshBasicMaterial({ color: 0xef4444, transparent: true, opacity: 0.25, depthWrite: false })
+  );
+  root.add(vesselGuide, arterialFlow, venousFlow, neuralFlow);
+
   return {
     root,
     parts: reg.parts,
@@ -705,12 +828,64 @@ function buildHumanSpecimen(maxAniso: number): SpecimenBuildResult {
     shellMeshes: reg.shellMeshes,
     textures: reg.textures,
     updateAnimation: (elapsed: number) => {
-      // Subtle cardiac beat (~72 bpm) & respiratory chest rise
-      const beat = 1 + Math.pow(Math.max(0, Math.sin(elapsed * 4.2)), 6) * 0.075;
-      heartGroup.scale.setScalar(beat);
+      // Two-phase cardiac Lub-Dub contraction (~72 bpm)
+      const cycle = (elapsed * 1.2) % 1;
+      const lub = Math.exp(-Math.pow((cycle - 0.14) / 0.052, 2));
+      const dub = 0.65 * Math.exp(-Math.pow((cycle - 0.32) / 0.048, 2));
+      const atrialKick = Math.exp(-Math.pow((cycle - 0.06) / 0.045, 2));
 
-      const breath = Math.sin(elapsed * 1.45) * 0.032;
-      lungsGroup.scale.set(1 + breath, 1 + breath * 0.5, 1 + breath);
+      heartGroup.scale.setScalar(1 + (lub + dub) * 0.085);
+      ventricleCone.scale.set(0.88 * (1 + lub * 0.09), 1.18 * (1 - lub * 0.05), 0.85 * (1 + lub * 0.09));
+      rightAtrium.scale.setScalar(1 + atrialKick * 0.14);
+
+      // Synchronized respiratory chest expansion + diaphragm dome flattening
+      const breath = Math.sin(elapsed * 1.45);
+      const tidal = 0.5 + 0.5 * breath; // 0..1 inhalation phase
+      rightLung.scale.set(0.84 * (1 + breath * 0.048), 1.55 * (1 + breath * 0.02), 0.92 * (1 + breath * 0.052));
+      leftLung.scale.set(0.78 * (1 + breath * 0.048), 1.48 * (1 + breath * 0.02), 0.9 * (1 + breath * 0.052));
+      diaphragmDome.position.y = -0.24 - tidal * 0.045;
+      diaphragmDome.scale.y = 0.42 - tidal * 0.12;
+      sternum.position.z = 0.24 + tidal * 0.018;
+
+      // Subtle GI peristalsis wave
+      stomachGroup.scale.set(1 + Math.sin(elapsed * 2.1) * 0.025, 1 + Math.cos(elapsed * 2.1) * 0.02, 1);
+      intGroup.scale.set(1 + Math.sin(elapsed * 1.7 + 1.2) * 0.018, 1, 1 + Math.cos(elapsed * 1.7) * 0.018);
+
+      // Pulsatile RBC circulation along aorta & vena cava
+      const pulseBoost = elapsed * 0.34 + (lub + dub) * 0.015;
+      for (let i = 0; i < arterialCount; i++) {
+        const u = (pulseBoost + i / arterialCount) % 1;
+        arterialCurve.getPointAt(u, _animPt);
+        arterialCurve.getTangentAt(u, _animTan);
+        _animDummy.position.copy(_animPt);
+        _animDummy.lookAt(_animPt.x + _animTan.x, _animPt.y + _animTan.y, _animPt.z + _animTan.z);
+        _animDummy.scale.setScalar(0.85 + lub * 0.35);
+        _animDummy.updateMatrix();
+        arterialFlow.setMatrixAt(i, _animDummy.matrix);
+      }
+      arterialFlow.instanceMatrix.needsUpdate = true;
+
+      for (let i = 0; i < venousCount; i++) {
+        const u = (elapsed * 0.26 + i / venousCount) % 1;
+        venousCurve.getPointAt(u, _animPt);
+        _animDummy.position.copy(_animPt);
+        _animDummy.rotation.set(0, elapsed * 1.5 + i, 0);
+        _animDummy.scale.setScalar(0.95);
+        _animDummy.updateMatrix();
+        venousFlow.setMatrixAt(i, _animDummy.matrix);
+      }
+      venousFlow.instanceMatrix.needsUpdate = true;
+
+      // Neural action potentials descending brainstem -> spinal cord
+      for (let i = 0; i < sparkCount; i++) {
+        const u = (elapsed * 0.65 + i / sparkCount) % 1;
+        neuralCurve.getPointAt(u, _animPt);
+        _animDummy.position.copy(_animPt);
+        _animDummy.scale.setScalar(0.75 + Math.sin(elapsed * 8 + i) * 0.35);
+        _animDummy.updateMatrix();
+        neuralFlow.setMatrixAt(i, _animDummy.matrix);
+      }
+      neuralFlow.instanceMatrix.needsUpdate = true;
     },
   };
 }

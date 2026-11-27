@@ -9,6 +9,7 @@ import {
   ChevronRight,
   ChevronUp,
   Eye,
+  FileDown,
   Focus,
   Layers,
   LayoutGrid,
@@ -16,6 +17,7 @@ import {
   Play,
   RotateCcw,
   RefreshCw,
+  Save,
   Search,
   X,
 } from 'lucide-react';
@@ -27,6 +29,7 @@ import {
   SpecimenBuildResult,
 } from '../three/anatomyBuilder';
 import { useAuth } from '../hooks/useAuth';
+import { useSaveLabResult } from './labs/useSaveLabResult';
 import { cn } from '../lib/utils';
 
 // Module-scope scratch math helpers (zero GC inside animation loop)
@@ -71,6 +74,7 @@ export default function LivingAnatomyLab({
   const [explodeTarget, setExplodeTarget] = useState<number>(0);
   const [xrayShell, setXrayShell] = useState<boolean>(true);
   const [motionEnabled, setMotionEnabled] = useState<boolean>(true);
+  const [motionSpeed, setMotionSpeed] = useState<0.4 | 1 | 1.8>(1);
   const [autoRotate, setAutoRotate] = useState<boolean>(false);
   const [dockCollapsed, setDockCollapsed] = useState<boolean>(false);
   const [showFacts, setShowFacts] = useState<boolean>(false);
@@ -82,10 +86,21 @@ export default function LivingAnatomyLab({
 
   const canvasMountRef = useRef<HTMLDivElement>(null);
 
+  const {
+    saveResult,
+    downloadPdfReport,
+    recordStep,
+    recordedSteps,
+    saving,
+    feedback: labFeedback,
+    canSave,
+  } = useSaveLabResult('biology');
+
   // Refs synced to Three.js loop without triggering scene rebuilds
   const explodeTargetRef = useRef(explodeTarget);
   const xrayShellRef = useRef(xrayShell);
   const motionEnabledRef = useRef(motionEnabled);
+  const motionSpeedRef = useRef(motionSpeed);
   const autoRotateRef = useRef(autoRotate);
   const selectedPartIdRef = useRef(selectedPartId);
   const hoveredPartIdRef = useRef(hoveredPartId);
@@ -93,6 +108,7 @@ export default function LivingAnatomyLab({
   explodeTargetRef.current = explodeTarget;
   xrayShellRef.current = xrayShell;
   motionEnabledRef.current = motionEnabled;
+  motionSpeedRef.current = motionSpeed;
   autoRotateRef.current = autoRotate;
   selectedPartIdRef.current = selectedPartId;
   hoveredPartIdRef.current = hoveredPartId;
@@ -102,6 +118,7 @@ export default function LivingAnatomyLab({
     focusPart: (partId: string) => void;
     resetCamera: (id?: OrganismId) => void;
     applyVisualState: () => void;
+    captureSnapshot: () => string | null;
   } | null>(null);
 
   const activeOrganism = useMemo(
@@ -388,11 +405,22 @@ export default function LivingAnatomyLab({
       camTransitionActive = true;
     };
 
+    const captureSnapshot = (): string | null => {
+      if (disposed) return null;
+      try {
+        renderer.render(scene, camera);
+        return renderer.domElement.toDataURL('image/png');
+      } catch {
+        return null;
+      }
+    };
+
     sceneApiRef.current = {
       loadOrganism,
       focusPart,
       resetCamera,
       applyVisualState,
+      captureSnapshot,
     };
 
     loadOrganism(resolvedInitialOrganism);
@@ -434,6 +462,11 @@ export default function LivingAnatomyLab({
         setSelectedPartId(hitPartId);
         setShowFacts(false);
         focusPart(hitPartId);
+        const def = ORGANISMS.find((o) => o.id === currentOrganismId);
+        const partObj = def?.parts.find((p) => p.id === hitPartId);
+        if (partObj) {
+          recordStep(`Inspected 3D ${partObj.name} (${partObj.system}) in ${def?.name ?? 'specimen'}.`);
+        }
       }
     };
 
@@ -526,10 +559,10 @@ export default function LivingAnatomyLab({
         }
       }
 
-      // Subtle biological motion
+      // Subtle biological motion scaled by user playback speed
       if (activeSpecimen && motionEnabledRef.current) {
-        animElapsed += delta;
-        activeSpecimen.updateAnimation(animElapsed, delta);
+        animElapsed += delta * motionSpeedRef.current;
+        activeSpecimen.updateAnimation(animElapsed, delta * motionSpeedRef.current);
       }
 
       controls.autoRotate = !isSoftwareGl && autoRotateRef.current;
@@ -570,6 +603,10 @@ export default function LivingAnatomyLab({
     sceneApiRef.current?.applyVisualState();
   }, [selectedPartId, hoveredPartId, xrayShell]);
 
+  useEffect(() => {
+    recordStep(`Loaded 3D Living Anatomy specimen: ${activeOrganism.name} (${activeOrganism.scientificName}).`);
+  }, [activeOrganism.id, activeOrganism.name, activeOrganism.scientificName, recordStep]);
+
   const handleOrganismSelect = (nextId: OrganismId) => {
     if (nextId === organismId) return;
     setOrganismId(nextId);
@@ -594,6 +631,10 @@ export default function LivingAnatomyLab({
   const handleSelectPart = (partId: string, focus = true) => {
     setSelectedPartId(partId);
     setShowFacts(false);
+    const partObj = activeOrganism.parts.find((p) => p.id === partId);
+    if (partObj) {
+      recordStep(`Focused on ${partObj.name} (${partObj.system}) in ${activeOrganism.name}.`);
+    }
     if (focus) {
       sceneApiRef.current?.focusPart(partId);
     }
@@ -605,6 +646,28 @@ export default function LivingAnatomyLab({
     const idx = selectedPartIndex >= 0 ? selectedPartIndex : 0;
     const nextIdx = (idx + dir + parts.length) % parts.length;
     handleSelectPart(parts[nextIdx].id, true);
+  };
+
+  const buildReportPayload = () => {
+    const partSummary = selectedPart
+      ? `Focused on ${selectedPart.name} (${selectedPart.system}): ${selectedPart.functionality}`
+      : `Completed full 3D anatomical exploration of ${activeOrganism.name}.`;
+    const factsNote = selectedPart?.keyFacts.length
+      ? `Key Anatomy Facts (${selectedPart.name}): ${selectedPart.keyFacts.join(' | ')}`
+      : `${activeOrganism.name} features ${activeOrganism.parts.length} interactive anatomical structures.`;
+    const defaultSteps = [
+      `Loaded 3D Living Anatomy specimen: ${activeOrganism.name} (${activeOrganism.scientificName}).`,
+      `Adjusted anatomical visualization (X-Ray Shell ${xrayShell ? 'On' : 'Off'}, Explode ${Math.round(explodeTarget * 100)}%, Motion ${motionEnabled ? `${motionSpeed}x` : 'Paused'}).`,
+      partSummary,
+    ];
+
+    return {
+      experimentTitle: `3D Anatomy: ${activeOrganism.name}`,
+      outcome: partSummary,
+      measurements: `${activeOrganism.parts.length} anatomical structures · Explode ${Math.round(explodeTarget * 100)}% · X-Ray ${xrayShell ? 'On' : 'Off'} · Motion ${motionSpeed}x`,
+      notes: factsNote,
+      stepsTaken: recordedSteps.length > 0 ? recordedSteps : defaultSteps,
+    };
   };
 
   return (
@@ -969,6 +1032,7 @@ export default function LivingAnatomyLab({
                       type="button"
                       onClick={() => {
                         setHumanSystemFilter(sys.id);
+                        recordStep(`Filtered human anatomy systems to ${sys.label}.`);
                         if (sys.id !== 'all') {
                           const match = activeOrganism.parts.find((p) =>
                             p.system.toLowerCase().includes(sys.id.toLowerCase())
@@ -1026,7 +1090,7 @@ export default function LivingAnatomyLab({
 
             {/* Studio Interactive Controls */}
             <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-              <div className="flex items-center gap-2.5 min-w-[200px] flex-1 max-w-xs">
+              <div className="flex items-center gap-2.5 min-w-[180px] flex-1 max-w-xs">
                 <Layers size={14} className="text-slate-400 shrink-0" />
                 <label
                   htmlFor="explode-slider"
@@ -1042,6 +1106,9 @@ export default function LivingAnatomyLab({
                   step={0.01}
                   value={explodeTarget}
                   onChange={(e) => setExplodeTarget(Number(e.target.value))}
+                  onMouseUp={() =>
+                    recordStep(`Set Exploded Dissection View to ${Math.round(explodeTarget * 100)}%.`)
+                  }
                   className="w-full accent-sky-400 cursor-pointer"
                 />
                 <span className="text-xs font-semibold text-slate-200 tabular-nums w-9 text-right">
@@ -1049,10 +1116,16 @@ export default function LivingAnatomyLab({
                 </span>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center gap-1.5">
                 <button
                   type="button"
-                  onClick={() => setXrayShell((prev) => !prev)}
+                  onClick={() => {
+                    setXrayShell((prev) => {
+                      const next = !prev;
+                      recordStep(`Toggled X-Ray outer shell ${next ? 'On' : 'Off'}.`);
+                      return next;
+                    });
+                  }}
                   className={cn(
                     'inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium border transition-colors whitespace-nowrap shrink-0',
                     xrayShell
@@ -1061,7 +1134,7 @@ export default function LivingAnatomyLab({
                   )}
                 >
                   <Eye size={13} />
-                  <span>X-Ray Shell</span>
+                  <span>X-Ray</span>
                 </button>
 
                 <button
@@ -1075,8 +1148,30 @@ export default function LivingAnatomyLab({
                   )}
                 >
                   {motionEnabled ? <Pause size={13} /> : <Play size={13} />}
-                  <span>{motionEnabled ? 'Motion On' : 'Motion Off'}</span>
+                  <span>{motionEnabled ? 'Live' : 'Paused'}</span>
                 </button>
+
+                <div className="inline-flex items-center rounded-xl bg-white/6 border border-white/10 p-0.5 shrink-0">
+                  {([0.4, 1, 1.8] as const).map((rate) => (
+                    <button
+                      key={rate}
+                      type="button"
+                      onClick={() => {
+                        setMotionSpeed(rate);
+                        if (!motionEnabled) setMotionEnabled(true);
+                        recordStep(`Adjusted biological motion rate to ${rate}x.`);
+                      }}
+                      className={cn(
+                        'px-2 py-1 rounded-lg text-[11px] font-semibold transition-colors whitespace-nowrap tabular-nums',
+                        motionSpeed === rate
+                          ? 'bg-emerald-500 text-slate-950'
+                          : 'text-slate-300 hover:text-white'
+                      )}
+                    >
+                      {rate === 0.4 ? '0.4x' : rate === 1 ? '1x' : '1.8x'}
+                    </button>
+                  ))}
+                </div>
 
                 <button
                   type="button"
@@ -1101,10 +1196,50 @@ export default function LivingAnatomyLab({
                   className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium bg-white/8 text-slate-200 hover:bg-white/15 border border-white/10 transition-colors whitespace-nowrap shrink-0"
                 >
                   <RotateCcw size={13} />
-                  <span>Reset View</span>
+                  <span>Reset</span>
+                </button>
+
+                {canSave && (
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={() => saveResult(buildReportPayload())}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-sky-500 text-slate-950 hover:bg-sky-400 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0"
+                  >
+                    <Save size={13} />
+                    <span>{saving ? 'Saving...' : 'Save Lab'}</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const snapshotDataUrl = sceneApiRef.current?.captureSnapshot() || undefined;
+                    downloadPdfReport({
+                      ...buildReportPayload(),
+                      snapshotDataUrl,
+                    });
+                  }}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-emerald-500 text-slate-950 hover:bg-emerald-400 transition-colors whitespace-nowrap shrink-0"
+                >
+                  <FileDown size={13} />
+                  <span>PDF Report</span>
                 </button>
               </div>
             </div>
+
+            {labFeedback && (
+              <p
+                className={cn(
+                  'text-[11px] font-medium px-2.5 py-1.5 rounded-lg border',
+                  labFeedback.type === 'success'
+                    ? 'bg-emerald-500/15 border-emerald-400/30 text-emerald-300'
+                    : 'bg-rose-500/15 border-rose-400/30 text-rose-300'
+                )}
+              >
+                {labFeedback.text}
+              </p>
+            )}
           </div>
         )}
       </div>

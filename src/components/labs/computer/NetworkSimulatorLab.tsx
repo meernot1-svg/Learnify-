@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Globe, Network, Play, RotateCcw, Save, Server, Shield, ShieldAlert, Wifi } from 'lucide-react';
+import { FileDown, Globe, Network, Play, RotateCcw, Save, Server, Shield, ShieldAlert, Wifi } from 'lucide-react';
 import { useSaveLabResult } from '../useSaveLabResult';
 import { cn } from '../../../lib/utils';
 
@@ -32,7 +32,7 @@ export default function NetworkSimulatorLab() {
   const [activeHopIdx, setActiveHopIdx] = useState<number>(0);
   const [playing, setPlaying] = useState<boolean>(false);
 
-  const { saveResult, saving, feedback, canSave } = useSaveLabResult('computer');
+  const { saveResult, downloadPdfReport, saving, feedback, canSave } = useSaveLabResult('computer');
 
   const hops: PacketHop[] = React.useMemo(() => {
     const l = baseLatency;
@@ -325,29 +325,49 @@ export default function NetworkSimulatorLab() {
         </table>
       </div>
 
-      {canSave && (
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="text-xs text-muted-foreground">
-            {feedback ? feedback.text : 'Log this packet trace experiment to your dashboard progress tracker.'}
-          </p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-xs text-muted-foreground">
+          {feedback ? feedback.text : 'Log this packet trace experiment or export a detailed PDF packet-routing summary.'}
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          {canSave && (
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() =>
+                saveResult({
+                  experimentTitle: `Network Trace (${scenario.toUpperCase()})`,
+                  outcome: `${hops.length} packet hops simulated (${blockFirewall ? 'Firewall Denied' : 'Delivered Successfully'})`,
+                  formula: `Base RTT ${baseLatency} ms`,
+                  measurements: hops.map((h) => `${h.from}->${h.to}:${h.flags}`).join(' | '),
+                })
+              }
+              className="px-4 py-2 rounded-xl bg-primary text-primary-foreground text-xs font-semibold flex items-center gap-1.5 hover:opacity-90 whitespace-nowrap"
+            >
+              <Save size={14} />
+              <span>{saving ? 'Saving...' : 'Save Lab'}</span>
+            </button>
+          )}
           <button
             type="button"
-            disabled={saving}
             onClick={() =>
-              saveResult({
+              downloadPdfReport({
                 experimentTitle: `Network Trace (${scenario.toUpperCase()})`,
-                outcome: `${hops.length} packet hops simulated (${blockFirewall ? 'Firewall Denied' : 'Delivered Successfully'})`,
-                formula: `Base RTT ${baseLatency} ms`,
-                measurements: hops.map((h) => `${h.from}->${h.to}:${h.flags}`).join(' | '),
+                outcome: `Simulated ${hops.length} network hops for ${scenario.toUpperCase()} (${blockFirewall ? 'Firewall Policy Dropped Traffic at Port/ACL' : 'End-to-End Packet Delivery Verified'}).`,
+                formula: `Base RTT = ${baseLatency} ms | Firewall ACL = ${blockFirewall ? 'DENY' : 'ALLOW'}`,
+                measurements: `Hops traced: ${hops.length} | Final hop latency: ${hops[hops.length - 1]?.latencyMs ?? baseLatency} ms | Final status: ${hops[hops.length - 1]?.status ?? 'complete'}`,
+                stepsTaken: hops.map(
+                  (h) => `Hop #${h.step} (${h.from} -> ${h.to}, ${h.protocol}, TTL=${h.ttl}, ${h.latencyMs}ms): [${h.flags}] ${h.payload}`
+                ),
               })
             }
-            className="px-4 py-2 rounded-xl bg-primary text-primary-foreground text-xs font-semibold flex items-center gap-2 hover:opacity-90"
+            className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-semibold flex items-center gap-1.5 hover:bg-emerald-500 whitespace-nowrap"
           >
-            <Save size={14} />
-            <span>{saving ? 'Saving...' : 'Save Network Trace'}</span>
+            <FileDown size={14} />
+            <span>PDF Report</span>
           </button>
         </div>
-      )}
+      </div>
     </div>
   );
 }

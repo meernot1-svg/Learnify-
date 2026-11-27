@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, Cpu, Play, Pause, Save, Zap } from 'lucide-react';
+import { Activity, Cpu, FileDown, Play, Pause, Save, Zap } from 'lucide-react';
 import { useSaveLabResult } from '../useSaveLabResult';
 import { cn } from '../../../lib/utils';
 
@@ -10,7 +10,8 @@ type LogicGateKind = 'AND' | 'OR' | 'NOT' | 'NAND' | 'NOR' | 'XOR' | 'XNOR' | 'H
 
 export default function ElectricalLabSuite() {
   const [tab, setTab] = useState<ElectricalTab>('circuits');
-  const { saveResult, saving, feedback, canSave } = useSaveLabResult('electrical');
+  const { saveResult, downloadPdfReport, recordStep, saving, feedback, canSave } =
+    useSaveLabResult('electrical');
 
   // 1. DC Circuit Solver state
   const [topology, setTopology] = useState<CircuitTopology>('series');
@@ -264,7 +265,10 @@ export default function ElectricalLabSuite() {
                   <button
                     key={id}
                     type="button"
-                    onClick={() => setTopology(id)}
+                    onClick={() => {
+                      setTopology(id);
+                      recordStep(`Configured DC circuit topology to ${label}.`);
+                    }}
                     className={cn(
                       'px-2.5 py-1 rounded-lg text-xs font-semibold border',
                       topology === id
@@ -278,7 +282,13 @@ export default function ElectricalLabSuite() {
               </div>
               <button
                 type="button"
-                onClick={() => setSwitchClosed((s) => !s)}
+                onClick={() =>
+                  setSwitchClosed((s) => {
+                    const next = !s;
+                    recordStep(`Toggled main circuit switch to ${next ? 'CLOSED' : 'OPEN'}.`);
+                    return next;
+                  })
+                }
                 className={cn(
                   'px-3 py-1 rounded-lg text-xs font-mono font-bold border',
                   switchClosed
@@ -302,6 +312,24 @@ export default function ElectricalLabSuite() {
                 stroke={switchClosed ? '#22d3ee' : '#475569'}
                 strokeWidth="3"
               />
+              {/* Animated Moving Current Carrier Pulses when switch is closed */}
+              {switchClosed && circuitTelemetry.iTotalMa > 0 && (
+                <>
+                  {[0, 0.25, 0.5, 0.75].map((phase, idx) => {
+                    const durSec = Math.max(1.1, Math.min(4.8, 36 / Math.max(8, circuitTelemetry.iTotalMa)));
+                    return (
+                      <circle key={idx} r="3.6" fill="#fde047" opacity="0.9">
+                        <animateMotion
+                          dur={`${durSec.toFixed(2)}s`}
+                          repeatCount="indefinite"
+                          begin={`${(phase * durSec).toFixed(2)}s`}
+                          path="M 55 35 L 365 35 L 365 175 L 55 175 Z"
+                        />
+                      </circle>
+                    );
+                  })}
+                </>
+              )}
               {/* Battery Source */}
               <rect x="35" y="82" width="40" height="46" rx="6" fill="#0f172a" stroke="#f59e0b" strokeWidth="2" />
               <text x="55" y="108" textAnchor="middle" fontSize="11" fill="#f59e0b" fontWeight="bold">
@@ -320,6 +348,12 @@ export default function ElectricalLabSuite() {
               {/* Second Component (R2 or LED) */}
               {topology === 'led' ? (
                 <g transform="translate(365, 105)">
+                  {switchClosed && sourceVolts >= 2 && (
+                    <circle
+                      r="30"
+                      fill={circuitTelemetry.ledWarning ? 'rgba(239,68,68,0.28)' : 'rgba(34,197,94,0.25)'}
+                    />
+                  )}
                   <circle
                     r="22"
                     fill={
@@ -439,24 +473,48 @@ export default function ElectricalLabSuite() {
               </div>
             </div>
 
-            {canSave && (
+            <div className="flex flex-wrap gap-2">
+              {canSave && (
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() =>
+                    saveResult({
+                      experimentTitle: `DC Circuit (${topology})`,
+                      outcome: `Vs=${sourceVolts}V, I=${circuitTelemetry.iTotalMa.toFixed(2)} mA, P=${circuitTelemetry.powerMw.toFixed(1)} mW`,
+                      formula: 'V = I · R, P = V · I',
+                      measurements: `R1=${r1}Ω | R2=${r2}Ω | V1=${circuitTelemetry.v1.toFixed(2)}V | V2=${circuitTelemetry.v2.toFixed(2)}V`,
+                    })
+                  }
+                  className="flex-1 py-2 px-3 rounded-xl bg-primary text-primary-foreground text-xs font-semibold flex items-center justify-center gap-1.5 whitespace-nowrap"
+                >
+                  <Save size={14} />
+                  <span>{saving ? 'Saving...' : 'Save Circuit'}</span>
+                </button>
+              )}
               <button
                 type="button"
-                disabled={saving}
                 onClick={() =>
-                  saveResult({
-                    experimentTitle: `DC Circuit (${topology})`,
-                    outcome: `Vs=${sourceVolts}V, I=${circuitTelemetry.iTotalMa.toFixed(2)} mA, P=${circuitTelemetry.powerMw.toFixed(1)} mW`,
-                    formula: 'V = I · R, P = V · I',
-                    measurements: `R₁=${r1}Ω | R₂=${r2}Ω`,
+                  downloadPdfReport({
+                    experimentTitle: `DC Circuit Analysis (${topology.toUpperCase()})`,
+                    outcome: switchClosed
+                      ? `Closed ${topology} circuit powered by Vs=${sourceVolts}V drew I=${circuitTelemetry.iTotalMa.toFixed(2)} mA across Req=${Number.isFinite(circuitTelemetry.req) ? circuitTelemetry.req.toFixed(1) : '∞'} Ω (Total Power = ${circuitTelemetry.powerMw.toFixed(1)} mW). Voltage drops measured V1=${circuitTelemetry.v1.toFixed(2)}V and V2=${circuitTelemetry.v2.toFixed(2)}V.`
+                      : `Circuit switch is OPEN, resulting in 0.00 mA current flow across all branches.`,
+                    formula: 'V = I · R_eq, P = V · I',
+                    measurements: `Vs=${sourceVolts}V | R1=${r1}Ω | R2=${r2}Ω | I=${circuitTelemetry.iTotalMa.toFixed(2)} mA | P=${circuitTelemetry.powerMw.toFixed(1)} mW`,
+                    stepsTaken: [
+                      `Selected ${topology} circuit configuration with DC source Vs = ${sourceVolts} V.`,
+                      `Set resistors R1 = ${r1} Ω and R2 = ${r2} Ω, with switch ${switchClosed ? 'CLOSED' : 'OPEN'}.`,
+                      `Measured total loop current I = ${circuitTelemetry.iTotalMa.toFixed(2)} mA and component drops V1=${circuitTelemetry.v1.toFixed(2)}V, V2=${circuitTelemetry.v2.toFixed(2)}V.`,
+                    ],
                   })
                 }
-                className="w-full py-2 rounded-xl bg-primary text-primary-foreground text-xs font-semibold flex items-center justify-center gap-2"
+                className="py-2 px-3 rounded-xl border border-border bg-card hover:bg-muted text-foreground text-xs font-semibold flex items-center justify-center gap-1.5 whitespace-nowrap"
               >
-                <Save size={14} />
-                <span>{saving ? 'Saving...' : 'Save Circuit Measurement'}</span>
+                <FileDown size={14} />
+                <span>PDF Report</span>
               </button>
-            )}
+            </div>
           </div>
         </div>
       )}
@@ -553,6 +611,55 @@ export default function ElectricalLabSuite() {
               <p className="text-[11px] font-mono text-muted-foreground">
                 Vrms (Sine): {(ampV / Math.SQRT2).toFixed(2)} V · T = {(1000 / freqHz).toFixed(1)} ms
               </p>
+              <div className="flex flex-wrap gap-2 pt-1">
+                {canSave && (
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={() => {
+                      const gain = enableRcFilter ? 1 / Math.sqrt(1 + Math.pow(freqHz / 80, 2)) : 1;
+                      saveResult({
+                        experimentTitle: `AC Oscilloscope (${shape.toUpperCase()} ${freqHz} Hz)`,
+                        outcome: `CH1 Vp=${ampV}V (Vrms=${(ampV / Math.SQRT2).toFixed(2)}V), CH2 phase=${phaseDeg}° with RC gain ${gain.toFixed(3)}.`,
+                        formula: 'V_rms = V_p / √2, |H(f)| = 1 / √(1 + (f/fc)²)',
+                        measurements: `f=${freqHz} Hz | T=${(1000 / freqHz).toFixed(1)} ms | RC=${enableRcFilter ? 'ON' : 'OFF'}`,
+                      });
+                    }}
+                    className="flex-1 py-1.5 px-2.5 rounded-lg bg-primary text-primary-foreground text-xs font-semibold flex items-center justify-center gap-1.5 whitespace-nowrap"
+                  >
+                    <Save size={13} />
+                    <span>{saving ? 'Saving...' : 'Save'}</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const gain = enableRcFilter ? 1 / Math.sqrt(1 + Math.pow(freqHz / 80, 2)) : 1;
+                    let snapshotDataUrl: string | undefined;
+                    try {
+                      snapshotDataUrl = oscCanvasRef.current?.toDataURL('image/png');
+                    } catch {
+                      snapshotDataUrl = undefined;
+                    }
+                    downloadPdfReport({
+                      experimentTitle: `AC Oscilloscope Signal Study (${shape.toUpperCase()} @ ${freqHz} Hz)`,
+                      outcome: `Captured ${shape} waveform at f=${freqHz} Hz (period T=${(1000 / freqHz).toFixed(1)} ms) and Vp=${ampV}V (Vrms=${(ampV / Math.SQRT2).toFixed(2)}V). CH2 showed ${phaseDeg}° phase shift and RC attenuation gain |H(f)|=${gain.toFixed(3)}.`,
+                      formula: 'T = 1 / f, V_rms = V_p / √2, |H(f)| = 1 / √(1 + (f/80)²)',
+                      measurements: `Shape=${shape} | f=${freqHz} Hz | Vp=${ampV} V | Phase=${phaseDeg}° | Gain=${gain.toFixed(3)}`,
+                      stepsTaken: [
+                        `Selected ${shape} signal generator waveform at ${freqHz} Hz and peak ${ampV} V.`,
+                        `Adjusted Channel 2 phase delay to ${phaseDeg}° with RC low-pass filter ${enableRcFilter ? 'ENABLED (fc=80 Hz)' : 'BYPASSED'}.`,
+                        `Measured RMS amplitude ${(ampV / Math.SQRT2).toFixed(2)} V and filter gain ${gain.toFixed(3)}.`,
+                      ],
+                      snapshotDataUrl,
+                    });
+                  }}
+                  className="py-1.5 px-2.5 rounded-lg border border-border bg-card hover:bg-muted text-foreground text-xs font-semibold flex items-center justify-center gap-1.5 whitespace-nowrap"
+                >
+                  <FileDown size={13} />
+                  <span>PDF Report</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -667,23 +774,54 @@ export default function ElectricalLabSuite() {
                 })}
               </tbody>
             </table>
-            {canSave && (
+            <div className="flex flex-wrap gap-2">
+              {canSave && (
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() =>
+                    saveResult({
+                      experimentTitle: `Digital Logic (${gateKind})`,
+                      outcome: `Verified ${gateKind} truth table (${gateRes.expr})`,
+                      formula: gateRes.expr,
+                      measurements: `Tested A=${inA}${gateKind !== 'NOT' ? `, B=${inB}` : ''} -> Out=${gateRes.out}${gateRes.carry !== undefined ? `, Carry=${gateRes.carry}` : ''}`,
+                    })
+                  }
+                  className="flex-1 py-2 px-3 rounded-xl bg-primary text-primary-foreground text-xs font-semibold flex items-center justify-center gap-1.5 whitespace-nowrap"
+                >
+                  <Save size={14} />
+                  <span>{saving ? 'Saving...' : 'Save Logic'}</span>
+                </button>
+              )}
               <button
                 type="button"
-                disabled={saving}
                 onClick={() =>
-                  saveResult({
-                    experimentTitle: `Digital Logic (${gateKind})`,
-                    outcome: `Verified ${gateKind} truth table (${gateRes.expr})`,
+                  downloadPdfReport({
+                    experimentTitle: `Digital Logic Gate Verification (${gateKind})`,
+                    outcome: `Verified Boolean function ${gateRes.expr} for ${gateKind}. Active probe state A=${inA}${gateKind !== 'NOT' ? `, B=${inB}` : ''} produced output ${gateRes.out}${gateRes.carry !== undefined ? ` with Carry=${gateRes.carry}` : ''}.`,
                     formula: gateRes.expr,
+                    measurements: truthRows
+                      .map((r) =>
+                        gateKind === 'NOT'
+                          ? `A=${r.a} -> Y=${r.out}`
+                          : gateKind === 'HALF_ADDER'
+                            ? `(${r.a},${r.b}) -> Sum=${r.out},C=${r.carry}`
+                            : `(${r.a},${r.b}) -> Y=${r.out}`
+                      )
+                      .join(' | '),
+                    stepsTaken: [
+                      `Selected digital logic component: ${gateKind}.`,
+                      `Toggled binary input probes to A=${inA}${gateKind !== 'NOT' ? ` and B=${inB}` : ''}.`,
+                      `Verified complete ${truthRows.length}-row Boolean truth table against ${gateRes.expr}.`,
+                    ],
                   })
                 }
-                className="w-full py-2 rounded-xl bg-primary text-primary-foreground text-xs font-semibold flex items-center justify-center gap-2"
+                className="py-2 px-3 rounded-xl border border-border bg-card hover:bg-muted text-foreground text-xs font-semibold flex items-center justify-center gap-1.5 whitespace-nowrap"
               >
-                <Save size={14} />
-                <span>{saving ? 'Saving...' : 'Save Logic Experiment'}</span>
+                <FileDown size={14} />
+                <span>PDF Report</span>
               </button>
-            )}
+            </div>
           </div>
         </div>
       )}

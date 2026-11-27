@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { Flame, Pause, Play, RotateCcw, Save, Zap } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { FileDown, Pause, Play, RotateCcw, Save, Zap } from 'lucide-react';
 import { useSaveLabResult } from '../useSaveLabResult';
 import { cn } from '../../../lib/utils';
 
@@ -104,12 +104,26 @@ export default function ReactionsLab() {
   const [temperatureK, setTemperatureK] = useState<number>(350);
   const [catalyst, setCatalyst] = useState<boolean>(false);
 
-  const { saveResult, saving, feedback, canSave } = useSaveLabResult('chemistry');
+  const chamberCanvasRef = useRef<HTMLCanvasElement>(null);
+
+  const {
+    saveResult,
+    downloadPdfReport,
+    recordStep,
+    recordedSteps,
+    saving,
+    feedback,
+    canSave,
+  } = useSaveLabResult('chemistry');
 
   const rxn = REACTIONS.find((r) => r.id === rxnId) ?? REACTIONS[0];
   const effectiveEa = catalyst ? Math.round(rxn.activationEa * 0.55) : rxn.activationEa;
   const isEndothermic = rxn.deltaH > 0;
   const rateFactor = ((temperatureK / 300) * (catalyst ? 1.85 : 1.0)).toFixed(2);
+
+  useEffect(() => {
+    recordStep(`Selected ${rxn.name} (${rxn.equation}) at ${temperatureK} K.`);
+  }, [rxn.id, rxn.name, rxn.equation, recordStep]);
 
   useEffect(() => {
     if (!playing) return;
@@ -118,13 +132,122 @@ export default function ReactionsLab() {
         const step = 1.6 * Number(rateFactor);
         if (prev + step >= 100) {
           setPlaying(false);
+          recordStep(`Completed reaction coordinate (100%) — ΔH = ${rxn.deltaH} kJ/mol.`);
           return 100;
         }
         return prev + step;
       });
-    }, 45);
+    }, 40);
     return () => window.clearInterval(interval);
-  }, [playing, rateFactor]);
+  }, [playing, rateFactor, rxn.deltaH, recordStep]);
+
+  // 60fps Canvas2D Molecular Collision & Transition-State Simulation
+  useEffect(() => {
+    const canvas = chamberCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    let rafId = 0;
+    let time = 0;
+    const draw = () => {
+      time += 0.045 * Number(rateFactor);
+      const w = canvas.width;
+      const h = canvas.height;
+      const tNorm = progress / 100;
+
+      ctx.clearRect(0, 0, w, h);
+
+      // Chamber background gradient shifts subtle thermal glow
+      const bg = ctx.createLinearGradient(0, 0, 0, h);
+      bg.addColorStop(0, '#020617');
+      bg.addColorStop(1, '#0f172a');
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, w, h);
+
+      // Catalytic Pt/Pd grid floor when catalyst is ON
+      if (catalyst) {
+        ctx.strokeStyle = 'rgba(16, 185, 129, 0.35)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(20, h - 18);
+        ctx.lineTo(w - 20, h - 18);
+        ctx.stroke();
+        ctx.fillStyle = 'rgba(16, 185, 129, 0.75)';
+        ctx.font = 'bold 10px monospace';
+        ctx.fillText('CATALYTIC SURFACE (-45% Ea)', 24, h - 24);
+      }
+
+      // Transition state halo pulse near t = 0.5
+      const tsProximity = Math.max(0, 1 - Math.abs(tNorm - 0.5) / 0.24);
+      if (tsProximity > 0.02) {
+        const cx = w / 2;
+        const cy = h / 2;
+        const r = 34 + tsProximity * 52 + Math.sin(time * 2.4) * 5;
+        const rad = ctx.createRadialGradient(cx, cy, 4, cx, cy, r);
+        rad.addColorStop(0, isEndothermic ? `rgba(56,189,248,${0.6 * tsProximity})` : `rgba(249,115,22,${0.65 * tsProximity})`);
+        rad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = rad;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Draw approaching reactants -> transition complex -> rebounding products
+      const items = tNorm < 0.5 ? rxn.reactants : rxn.products;
+      const spread =
+        tNorm < 0.5
+          ? (1 - tNorm * 2) * (w * 0.28)
+          : ((tNorm - 0.5) * 2) * (w * 0.26);
+
+      items.forEach((species, idx) => {
+        const count = Math.min(species.count, 3);
+        for (let c = 0; c < count; c++) {
+          const dirSign = (idx + c) % 2 === 0 ? -1 : 1;
+          const jitterX = Math.sin(time * 2.1 + idx * 1.9 + c) * (3 + temperatureK / 160);
+          const jitterY = Math.cos(time * 2.4 + idx * 1.3 + c * 2) * (6 + temperatureK / 140);
+          const px = w / 2 + dirSign * (24 + spread) + jitterX;
+          const py = h / 2 + ((idx - (items.length - 1) / 2) * 32) + ((c - (count - 1) / 2) * 18) + jitterY;
+
+          // Electron shell / thermal halo
+          ctx.fillStyle = species.color + '44';
+          ctx.beginPath();
+          ctx.arc(px, py, 20, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.fillStyle = species.color;
+          ctx.beginPath();
+          ctx.arc(px, py, 13, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.strokeStyle = '#ffffffaa';
+          ctx.lineWidth = 1.4;
+          ctx.stroke();
+
+          ctx.fillStyle = '#0f172a';
+          ctx.font = 'bold 10px monospace';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(species.label, px, py);
+        }
+      });
+
+      // Stage watermark
+      ctx.textAlign = 'left';
+      ctx.fillStyle = 'rgba(148, 163, 184, 0.85)';
+      ctx.font = '11px monospace';
+      ctx.fillText(
+        tNorm < 0.32 ? 'Phase: Molecular Approach' : tNorm < 0.68 ? 'Phase: Activated Complex [‡]' : 'Phase: Products Separated',
+        14,
+        18
+      );
+
+      rafId = window.requestAnimationFrame(draw);
+    };
+
+    rafId = window.requestAnimationFrame(draw);
+    return () => window.cancelAnimationFrame(rafId);
+  }, [rxn, progress, temperatureK, catalyst, rateFactor, isEndothermic]);
 
   const stageLabel =
     progress < 32
@@ -259,59 +382,13 @@ export default function ReactionsLab() {
               </span>
             </div>
 
-            <div className="h-44 rounded-xl bg-slate-900/80 border border-white/10 relative flex items-center justify-around px-4 overflow-hidden">
-              {progress < 50 ? (
-                <div className="flex flex-wrap items-center justify-center gap-4">
-                  {rxn.reactants.map((r, i) => (
-                    <div
-                      key={i}
-                      style={{
-                        transform: `translateX(${(progress / 50) * (i % 2 === 0 ? 18 : -18)}px)`,
-                      }}
-                      className="flex items-center gap-2 px-4 py-3 rounded-2xl border border-white/15 bg-slate-800/80 transition-transform"
-                    >
-                      <span
-                        className="w-5 h-5 rounded-full"
-                        style={{ backgroundColor: r.color }}
-                      />
-                      <span className="font-mono text-sm font-bold">
-                        {r.count > 1 ? `${r.count} ` : ''}
-                        {r.label}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="flex flex-wrap items-center justify-center gap-4">
-                  {rxn.products.map((p, i) => (
-                    <div
-                      key={i}
-                      style={{
-                        transform: `scale(${0.92 + ((progress - 50) / 50) * 0.08})`,
-                      }}
-                      className="flex items-center gap-2 px-4 py-3 rounded-2xl border border-emerald-400/30 bg-emerald-950/60 transition-transform"
-                    >
-                      <span
-                        className="w-5 h-5 rounded-full"
-                        style={{ backgroundColor: p.color }}
-                      />
-                      <span className="font-mono text-sm font-bold text-emerald-200">
-                        {p.count > 1 ? `${p.count} ` : ''}
-                        {p.label}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {progress >= 35 && progress <= 65 && (
-                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                  <div className="px-3 py-1 rounded-full bg-amber-500/20 border border-amber-400/40 text-amber-300 text-[11px] font-mono flex items-center gap-1.5">
-                    <Flame size={12} />
-                    Transition State Barrier
-                  </div>
-                </div>
-              )}
+            <div className="h-44 rounded-xl bg-slate-900/80 border border-white/10 relative overflow-hidden">
+              <canvas
+                ref={chamberCanvasRef}
+                width={560}
+                height={176}
+                className="w-full h-full block"
+              />
             </div>
 
             <div className="space-y-1">
@@ -379,24 +456,56 @@ export default function ReactionsLab() {
                 <p className="text-xs font-mono text-primary">{rxn.equation}</p>
                 <p className="text-xs text-muted-foreground leading-relaxed">{rxn.observation}</p>
               </div>
-              {canSave && (
+              <div className="flex flex-wrap gap-2">
+                {canSave && (
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={() =>
+                      saveResult({
+                        experimentTitle: rxn.name,
+                        outcome: rxn.observation,
+                        formula: rxn.equation,
+                        measurements: `ΔH = ${rxn.deltaH} kJ/mol | Ea = ${effectiveEa} kJ/mol | T = ${temperatureK} K`,
+                      })
+                    }
+                    className="flex-1 py-2 px-3 rounded-xl bg-primary text-primary-foreground text-xs font-semibold flex items-center justify-center gap-1.5 hover:opacity-90 disabled:opacity-50 whitespace-nowrap"
+                  >
+                    <Save size={14} />
+                    <span>{saving ? 'Saving...' : 'Save Lab'}</span>
+                  </button>
+                )}
                 <button
                   type="button"
-                  disabled={saving}
-                  onClick={() =>
-                    saveResult({
+                  onClick={() => {
+                    let snapshotDataUrl: string | undefined;
+                    try {
+                      snapshotDataUrl = chamberCanvasRef.current?.toDataURL('image/png');
+                    } catch {
+                      snapshotDataUrl = undefined;
+                    }
+                    downloadPdfReport({
                       experimentTitle: rxn.name,
-                      outcome: rxn.observation,
+                      outcome: `${isEndothermic ? 'Endothermic' : 'Exothermic'} reaction verified: ${rxn.observation}`,
                       formula: rxn.equation,
-                      measurements: `ΔH = ${rxn.deltaH} kJ/mol | Ea = ${effectiveEa} kJ/mol | T = ${temperatureK} K`,
-                    })
-                  }
-                  className="w-full py-2 rounded-xl bg-primary text-primary-foreground text-xs font-semibold flex items-center justify-center gap-2 hover:opacity-90 disabled:opacity-50"
+                      measurements: `ΔH = ${rxn.deltaH} kJ/mol | Effective Ea = ${effectiveEa} kJ/mol | Temp = ${temperatureK} K | Catalyst = ${catalyst ? 'Active' : 'None'} | Rate = ${rateFactor}x`,
+                      stepsTaken:
+                        recordedSteps.length > 0
+                          ? recordedSteps
+                          : [
+                              `Loaded ${rxn.name} (${rxn.equation}).`,
+                              `Set temperature to ${temperatureK} K (${catalyst ? 'with catalyst' : 'uncatalyzed'}).`,
+                              `Observed transition state barrier Ea = ${effectiveEa} kJ/mol and enthalpy change ΔH = ${rxn.deltaH} kJ/mol.`,
+                            ],
+                      snapshotDataUrl,
+                    });
+                  }}
+                  className="flex-1 py-2 px-3 rounded-xl bg-emerald-600 text-white text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-emerald-500 whitespace-nowrap"
                 >
-                  <Save size={14} />
-                  <span>{saving ? 'Saving...' : 'Save Reaction Data'}</span>
+                  <FileDown size={14} />
+                  <span>PDF Report</span>
                 </button>
-              )}
+              </div>
               {feedback && (
                 <p className="text-xs text-emerald-600 dark:text-emerald-400">{feedback.text}</p>
               )}

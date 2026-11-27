@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Pause, Play, Save } from 'lucide-react';
+import { FileDown, Pause, Play, Save } from 'lucide-react';
 import { useSaveLabResult } from '../useSaveLabResult';
 import { cn } from '../../../lib/utils';
 
@@ -16,7 +16,7 @@ export default function WavesAcousticsLab() {
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const phaseRef = useRef<number>(0);
-  const { saveResult, saving, feedback, canSave } = useSaveLabResult('physics');
+  const { saveResult, downloadPdfReport, saving, feedback, canSave } = useSaveLabResult('physics');
 
   const waveSpeed = 340;
   const wavelength = waveSpeed / freq;
@@ -314,24 +314,60 @@ export default function WavesAcousticsLab() {
             </p>
             <p className="text-muted-foreground">v = f · λ · T = {(1 / freq).toFixed(2)} s</p>
           </div>
-          {canSave && (
+          <div className="flex flex-wrap gap-2">
+            {canSave && (
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() =>
+                  saveResult({
+                    experimentTitle: `Waves Simulation (${mode})`,
+                    outcome: `Analyzed ${mode} wave at f=${freq.toFixed(1)} Hz, A=${amplitude}`,
+                    formula: 'v = f · λ',
+                    measurements: `λ=${wavelength.toFixed(1)} m`,
+                  })
+                }
+                className="flex-1 py-2 px-3 rounded-xl bg-primary text-primary-foreground text-xs font-semibold flex items-center justify-center gap-1.5 hover:opacity-90 whitespace-nowrap"
+              >
+                <Save size={14} />
+                <span>{saving ? 'Saving...' : 'Save Lab'}</span>
+              </button>
+            )}
             <button
               type="button"
-              disabled={saving}
-              onClick={() =>
-                saveResult({
+              onClick={() => {
+                let snapshotDataUrl: string | undefined;
+                try {
+                  snapshotDataUrl = canvasRef.current?.toDataURL('image/png');
+                } catch {
+                  snapshotDataUrl = undefined;
+                }
+                downloadPdfReport({
                   experimentTitle: `Waves Simulation (${mode})`,
-                  outcome: `Analyzed ${mode} wave at f=${freq.toFixed(1)} Hz, A=${amplitude}`,
-                  formula: 'v = f · λ',
-                  measurements: `λ=${wavelength.toFixed(1)} m`,
-                })
-              }
-              className="w-full py-2 rounded-xl bg-primary text-primary-foreground text-xs font-semibold flex items-center justify-center gap-2 hover:opacity-90"
+                  outcome:
+                    mode === 'standing'
+                      ? `Observed ${harmonic} antinodes and ${harmonic + 1} nodes on standing harmonic string.`
+                      : mode === 'superposition'
+                        ? `Measured wave interference beat frequency |f₁ − f₂| = ${Math.abs(freq - freq2).toFixed(1)} Hz.`
+                        : mode === 'doppler'
+                          ? `Simulated Doppler wavefront compression at source Mach ${sourceSpeed.toFixed(2)}c (approaching shift ${(1 / (1 - sourceSpeed)).toFixed(2)}× f₀).`
+                          : `Analyzed ${mode} propagation at frequency f=${freq.toFixed(1)} Hz and amplitude A=${amplitude} px (wavelength λ=${wavelength.toFixed(1)} m).`,
+                  formula: mode === 'doppler' ? "f' = f₀ / (1 - v/c)" : 'v = f · λ',
+                  measurements: `Frequency f₁=${freq.toFixed(1)} Hz | Wavelength λ=${wavelength.toFixed(1)} m | Amplitude=${amplitude} px`,
+                  stepsTaken: [
+                    `Selected ${mode} acoustics & wave simulator.`,
+                    `Configured frequency f=${freq.toFixed(1)} Hz and amplitude A=${amplitude} px.`,
+                    `Analyzed live phase propagation and wave interference nodes.`,
+                  ],
+                  snapshotDataUrl,
+                });
+              }}
+              className="flex-1 py-2 px-3 rounded-xl bg-emerald-600 text-white text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-emerald-500 whitespace-nowrap"
             >
-              <Save size={14} />
-              <span>{saving ? 'Saving...' : 'Save Wave Observation'}</span>
+              <FileDown size={14} />
+              <span>PDF Report</span>
             </button>
-          )}
+          </div>
           {feedback && <p className="text-xs text-emerald-600 dark:text-emerald-400">{feedback.text}</p>}
         </div>
       </div>

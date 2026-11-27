@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import {
   CheckCircle2,
+  FileDown,
   HelpCircle,
   RotateCcw,
   Save,
@@ -154,7 +155,16 @@ export default function BuildCellLab() {
     text: 'Choose each organelle that belongs inside this cell from the tray.',
   });
 
-  const { saveResult, saving, feedback: saveFeedback, canSave } = useSaveLabResult('biology');
+  const {
+    saveResult,
+    downloadPdfReport,
+    recordStep,
+    clearSteps,
+    recordedSteps,
+    saving,
+    feedback: saveFeedback,
+    canSave,
+  } = useSaveLabResult('biology');
 
   const requiredPieces = useMemo(
     () => PIECES.filter((p) => p.belongsTo.includes(cellType)),
@@ -168,10 +178,13 @@ export default function BuildCellLab() {
       : 100;
 
   const resetChallenge = (nextType?: ChallengeCell) => {
+    const resolvedType = nextType ?? cellType;
     if (nextType) setCellType(nextType);
     setPlacedIds([]);
     setMistakes(0);
     setShowHint(false);
+    clearSteps();
+    recordStep(`Started ${CHALLENGES[resolvedType].title} workspace.`);
     setStatusMessage({
       type: 'info',
       text: 'Choose each organelle that belongs inside this cell from the tray.',
@@ -184,7 +197,9 @@ export default function BuildCellLab() {
     if (piece.belongsTo.includes(cellType)) {
       const next = [...placedIds, piece.id];
       setPlacedIds(next);
+      recordStep(`Verified & placed ${piece.name} inside ${cellType} cell (${piece.functionShort}).`);
       if (next.length === requiredPieces.length) {
+        recordStep(`Completed ${cellType} cell assembly (${accuracy}% accuracy).`);
         setStatusMessage({
           type: 'ok',
           text: `${CHALLENGES[cellType].title} complete with ${accuracy}% accuracy!`,
@@ -197,6 +212,7 @@ export default function BuildCellLab() {
       }
     } else {
       setMistakes((m) => m + 1);
+      recordStep(`Rejected distractor organelle: ${piece.name} does not belong in a ${cellType} cell.`);
       setStatusMessage({
         type: 'err',
         text: `${piece.name} does not belong in a ${cellType} cell. Try another organelle!`,
@@ -247,6 +263,32 @@ export default function BuildCellLab() {
             <RotateCcw size={14} />
             <span>Reset</span>
           </button>
+          <button
+            type="button"
+            onClick={() =>
+              downloadPdfReport({
+                experimentTitle: CHALLENGES[cellType].title,
+                outcome: isComplete
+                  ? `Successfully assembled ${cellType} cell with ${accuracy}% accuracy (${mistakes} mistakes).`
+                  : `In progress: placed ${placedIds.length} of ${requiredPieces.length} required organelles (${accuracy}% accuracy).`,
+                measurements: `${placedIds.length}/${requiredPieces.length} organelles verified · ${mistakes} distractors avoided`,
+                notes: `Verified organelles: ${
+                  requiredPieces
+                    .filter((p) => placedIds.includes(p.id))
+                    .map((p) => p.name)
+                    .join(', ') || 'None placed yet'
+                }`,
+                stepsTaken:
+                  recordedSteps.length > 0
+                    ? recordedSteps
+                    : [`Selected ${CHALLENGES[cellType].title} construction challenge.`],
+              })
+            }
+            className="px-3 py-1.5 rounded-xl bg-emerald-600 text-white hover:bg-emerald-500 text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap"
+          >
+            <FileDown size={14} />
+            <span>PDF Report</span>
+          </button>
         </div>
       </div>
 
@@ -293,16 +335,34 @@ export default function BuildCellLab() {
             aria-label={`${cellType} cell construction stage`}
           >
             {/* Cytoplasm Membrane Envelope */}
+            <defs>
+              <radialGradient id="cytoGlow" cx="50%" cy="50%" r="55%">
+                <stop offset="0%" stopColor="#0ea5e9" stopOpacity="0.16" />
+                <stop offset="100%" stopColor="#020617" stopOpacity="0.02" />
+              </radialGradient>
+            </defs>
             {cellType === 'animal' && (
-              <ellipse
-                cx="50"
-                cy="50"
-                rx="38"
-                ry="34"
-                fill="#0ea5e918"
-                stroke="#38bdf8"
-                strokeWidth="1.5"
-              />
+              <>
+                <ellipse
+                  cx="50"
+                  cy="50"
+                  rx="38"
+                  ry="34"
+                  fill="url(#cytoGlow)"
+                  stroke="#38bdf8"
+                  strokeWidth="1.5"
+                />
+                <ellipse
+                  cx="50"
+                  cy="50"
+                  rx="36.2"
+                  ry="32.2"
+                  fill="none"
+                  stroke="#7dd3fc"
+                  strokeWidth="0.6"
+                  strokeDasharray="1.8 1.6"
+                />
+              </>
             )}
             {cellType === 'plant' && (
               <>
@@ -347,23 +407,82 @@ export default function BuildCellLab() {
                     fill="none"
                     stroke="#14b8a6"
                     strokeWidth="2.2"
-                  />
+                    strokeLinecap="round"
+                  >
+                    <animate
+                      attributeName="d"
+                      values="M 22 50 Q 15 40 10 50 T 2 50; M 22 50 Q 15 60 10 50 T 2 50; M 22 50 Q 15 40 10 50 T 2 50"
+                      dur="1.4s"
+                      repeatCount="indefinite"
+                    />
+                  </path>
                 )}
               </>
             )}
 
-            {/* Required Organelle Slots */}
+            {/* Ambient Cytoplasmic Streaming Motes */}
+            {[0, 1, 2, 3, 4].map((idx) => (
+              <circle key={`mote-${idx}`} r="0.8" fill="#fde047" opacity="0.55">
+                <animateMotion
+                  dur={`${4 + idx * 0.9}s`}
+                  repeatCount="indefinite"
+                  path={`M ${34 + idx * 5} 45 A 12 8 0 1 1 ${33 + idx * 5} 45 Z`}
+                />
+              </circle>
+            ))}
+
+            {/* Required Organelle Slots with Anatomical Graphics */}
             {requiredPieces.map((piece) => {
               const placed = placedIds.includes(piece.id);
+              const rBase = piece.id === 'nucleus' || piece.id === 'vacuole' ? 9 : 6.2;
               return (
                 <g key={piece.id} transform={`translate(${piece.slotPos.x}, ${piece.slotPos.y})`}>
-                  <circle
-                    r={piece.id === 'nucleus' || piece.id === 'vacuole' ? 9 : 6.2}
-                    fill={placed ? `${piece.color}cc` : '#1e293b88'}
-                    stroke={placed ? piece.color : '#64748b'}
-                    strokeWidth={placed ? 1.5 : 0.9}
-                    strokeDasharray={placed ? undefined : '1.5 1.5'}
-                  />
+                  {!placed ? (
+                    <circle
+                      r={rBase}
+                      fill="#1e293b88"
+                      stroke="#64748b"
+                      strokeWidth={0.9}
+                      strokeDasharray="1.5 1.5"
+                    />
+                  ) : piece.id === 'mitochondria' ? (
+                    <g>
+                      <ellipse rx="7.2" ry="4" fill="#ef4444cc" stroke="#fca5a5" strokeWidth="0.9">
+                        <animate attributeName="rx" values="7.2;7.6;7.2" dur="2.2s" repeatCount="indefinite" />
+                      </ellipse>
+                      <path
+                        d="M -4.8 0 Q -3.5 -2.2 -2.2 0 T 0.4 0 T 3 0 T 5 0"
+                        fill="none"
+                        stroke="#fef08a"
+                        strokeWidth="0.9"
+                      />
+                    </g>
+                  ) : piece.id === 'nucleus' ? (
+                    <g>
+                      <circle r="9" fill="#7c3aedcc" stroke="#c4b5fd" strokeWidth="1.2" strokeDasharray="2.5 1" />
+                      <circle r="3.4" fill="#4c1d95" stroke="#a78bfa" strokeWidth="0.7" />
+                    </g>
+                  ) : piece.id === 'chloroplast' ? (
+                    <g>
+                      <ellipse rx="7" ry="4.2" fill="#22c55ecc" stroke="#86efac" strokeWidth="0.9" />
+                      <rect x="-3.8" y="-1.8" width="2.2" height="3.6" rx="0.6" fill="#14532d" />
+                      <rect x="-0.8" y="-1.8" width="2.2" height="3.6" rx="0.6" fill="#14532d" />
+                      <rect x="2.2" y="-1.8" width="2.2" height="3.6" rx="0.6" fill="#14532d" />
+                    </g>
+                  ) : piece.id === 'golgi' ? (
+                    <g>
+                      <path d="M -5 -2.5 Q 0 -4.5 5 -2.5" fill="none" stroke="#f59e0b" strokeWidth="1.6" strokeLinecap="round" />
+                      <path d="M -6 0 Q 0 -2 6 0" fill="none" stroke="#fbbf24" strokeWidth="1.6" strokeLinecap="round" />
+                      <path d="M -4.5 2.5 Q 0 0.8 4.5 2.5" fill="none" stroke="#f59e0b" strokeWidth="1.6" strokeLinecap="round" />
+                    </g>
+                  ) : (
+                    <circle
+                      r={rBase}
+                      fill={`${piece.color}cc`}
+                      stroke={piece.color}
+                      strokeWidth={1.5}
+                    />
+                  )}
                   <text
                     y={piece.id === 'nucleus' || piece.id === 'vacuole' ? 13 : 10}
                     textAnchor="middle"

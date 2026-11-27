@@ -9,7 +9,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { Box, Calculator, Compass, Dice5, Save, TrendingUp } from 'lucide-react';
+import { Box, Calculator, Compass, Dice5, FileDown, Save, TrendingUp } from 'lucide-react';
 import { compileMathExpression } from '../../../lib/safeMathParser';
 import { createThreeViewport, disposeObject3D } from '../threeHelpers';
 import { useSaveLabResult } from '../useSaveLabResult';
@@ -34,7 +34,7 @@ const SOLIDS: Record<
 
 export default function MathLabSuite() {
   const [tab, setTab] = useState<MathTab>('calculus');
-  const { saveResult, saving, feedback, canSave } = useSaveLabResult('math');
+  const { saveResult, downloadPdfReport, recordStep, saving, feedback, canSave } = useSaveLabResult('math');
 
   // 1. Calculus & Function Grapher state
   const [expr1, setExpr1] = useState<string>('sin(x) + 0.25*x^2');
@@ -205,6 +205,7 @@ export default function MathLabSuite() {
   const [wireframe, setWireframe] = useState<boolean>(false);
   const [webglError, setWebglError] = useState<boolean>(false);
   const polyMountRef = useRef<HTMLDivElement>(null);
+  const polySnapshotRef = useRef<(() => string | null) | null>(null);
 
   useEffect(() => {
     if (tab !== 'geometry3d') return;
@@ -224,7 +225,8 @@ export default function MathLabSuite() {
     }
     setWebglError(false);
 
-    const { scene, camera, renderer, controls, afterDraw, dispose } = ctx;
+    const { scene, camera, renderer, controls, afterDraw, captureSnapshot, dispose } = ctx;
+    polySnapshotRef.current = captureSnapshot;
     let geometry: THREE.BufferGeometry;
     switch (solidKind) {
       case 'cube':
@@ -283,6 +285,7 @@ export default function MathLabSuite() {
 
     return () => {
       mounted = false;
+      polySnapshotRef.current = null;
       disposeObject3D(mesh);
       dispose();
     };
@@ -349,6 +352,15 @@ export default function MathLabSuite() {
       counts[roll]++;
     }
     setDiceCounts(Object.entries(counts).map(([sum, freq]) => ({ sum, freq })));
+    recordStep(`Executed Monte Carlo simulation for ${n} paired dice rolls.`);
+  };
+
+  const captureGraphSnapshot = (): string | undefined => {
+    try {
+      return graphCanvasRef.current?.toDataURL('image/png');
+    } catch {
+      return undefined;
+    }
   };
 
   return (
@@ -473,22 +485,48 @@ export default function MathLabSuite() {
               )}
             </div>
 
-            {canSave && calculusStats && (
-              <button
-                type="button"
-                disabled={saving}
-                onClick={() =>
-                  saveResult({
-                    experimentTitle: `Calculus Analysis: f(x) = ${expr1}`,
-                    outcome: `Slope at x=${tangentX} is ${calculusStats.deriv.toFixed(3)}; definite integral on [${integralA}, ${integralB}] ≈ ${calculusStats.integral.toFixed(3)}`,
-                    formula: expr1,
-                  })
-                }
-                className="w-full py-2 rounded-xl bg-primary text-primary-foreground text-xs font-semibold flex items-center justify-center gap-2"
-              >
-                <Save size={14} />
-                <span>{saving ? 'Saving...' : 'Save Calculus Study'}</span>
-              </button>
+            {calculusStats && (
+              <div className="flex flex-wrap gap-2">
+                {canSave && (
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={() =>
+                      saveResult({
+                        experimentTitle: `Calculus Analysis: f(x) = ${expr1}`,
+                        outcome: `Slope at x=${tangentX} is ${calculusStats.deriv.toFixed(3)}; definite integral on [${integralA}, ${integralB}] ≈ ${calculusStats.integral.toFixed(3)}`,
+                        formula: expr1,
+                        measurements: `g(x)=${expr2 || 'none'} | x0=${tangentX.toFixed(1)} | f(x0)=${calculusStats.fx0.toFixed(3)}`,
+                      })
+                    }
+                    className="flex-1 py-2 px-3 rounded-xl bg-primary text-primary-foreground text-xs font-semibold flex items-center justify-center gap-1.5 whitespace-nowrap"
+                  >
+                    <Save size={14} />
+                    <span>{saving ? 'Saving...' : 'Save Study'}</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() =>
+                    downloadPdfReport({
+                      experimentTitle: `Calculus Analysis: f(x) = ${expr1}`,
+                      outcome: `At x0=${tangentX.toFixed(1)}, f(x0)=${calculusStats.fx0.toFixed(3)} and instantaneous derivative slope f'(x0)=${calculusStats.deriv.toFixed(3)}. Definite integral over [${integralA}, ${integralB}] is approximately ${calculusStats.integral.toFixed(3)}.`,
+                      formula: `f(x) = ${expr1}; g(x) = ${expr2 || 'none'}`,
+                      measurements: `Tangent x0=${tangentX.toFixed(1)} | Interval [${integralA}, ${integralB}] | Riemann n=40`,
+                      stepsTaken: [
+                        `Plotted primary curve f(x) = ${expr1} and comparison curve g(x) = ${expr2 || 'none'}.`,
+                        `Positioned tangent line probe at x0 = ${tangentX.toFixed(1)} to compute f'(x0) = ${calculusStats.deriv.toFixed(3)}.`,
+                        `Evaluated midpoint Riemann integral over [${integralA}, ${integralB}] yielding ${calculusStats.integral.toFixed(3)}.`,
+                      ],
+                      snapshotDataUrl: captureGraphSnapshot(),
+                    })
+                  }
+                  className="py-2 px-3 rounded-xl border border-border bg-card hover:bg-muted text-foreground text-xs font-semibold flex items-center justify-center gap-1.5 whitespace-nowrap"
+                >
+                  <FileDown size={14} />
+                  <span>PDF Report</span>
+                </button>
+              </div>
             )}
           </div>
         </div>
@@ -512,7 +550,10 @@ export default function MathLabSuite() {
                   <button
                     key={s}
                     type="button"
-                    onClick={() => setSolidKind(s)}
+                    onClick={() => {
+                      setSolidKind(s);
+                      recordStep(`Inspected 3D ${SOLIDS[s].label} (${SOLIDS[s].euler}).`);
+                    }}
                     className={cn(
                       'py-2 px-2.5 rounded-xl border text-xs font-semibold text-left',
                       solidKind === s
@@ -541,7 +582,13 @@ export default function MathLabSuite() {
               </div>
               <button
                 type="button"
-                onClick={() => setWireframe((w) => !w)}
+                onClick={() => {
+                  setWireframe((w) => {
+                    const next = !w;
+                    recordStep(`Toggled 3D geometry mesh to ${next ? 'Wireframe' : 'Shaded Solid'}.`);
+                    return next;
+                  });
+                }}
                 className="w-full py-2 rounded-xl border border-border bg-card text-xs font-semibold"
               >
                 {wireframe ? 'Switch to Shaded Solid' : 'Switch to Wireframe Mesh'}
@@ -556,23 +603,47 @@ export default function MathLabSuite() {
                 </p>
               </div>
             </div>
-            {canSave && (
+            <div className="flex flex-wrap gap-2">
+              {canSave && (
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() =>
+                    saveResult({
+                      experimentTitle: `3D Geometry: ${SOLIDS[solidKind].label}`,
+                      outcome: `${SOLIDS[solidKind].euler} · Vol = ${solidStats.vol}, SA = ${solidStats.area}`,
+                      formula: `V = ${SOLIDS[solidKind].formulaVol}`,
+                      measurements: `Scale=${solidScale.toFixed(1)} | Mode=${wireframe ? 'Wireframe' : 'Shaded'}`,
+                    })
+                  }
+                  className="flex-1 py-2 px-3 rounded-xl bg-primary text-primary-foreground text-xs font-semibold flex items-center justify-center gap-1.5 whitespace-nowrap"
+                >
+                  <Save size={14} />
+                  <span>{saving ? 'Saving...' : 'Save Geometry'}</span>
+                </button>
+              )}
               <button
                 type="button"
-                disabled={saving}
                 onClick={() =>
-                  saveResult({
+                  downloadPdfReport({
                     experimentTitle: `3D Geometry: ${SOLIDS[solidKind].label}`,
-                    outcome: `${SOLIDS[solidKind].euler} · Vol = ${solidStats.vol}, SA = ${solidStats.area}`,
-                    formula: `V = ${SOLIDS[solidKind].formulaVol}`,
+                    outcome: `Verified topological properties (${SOLIDS[solidKind].euler}) at scale ${solidScale.toFixed(1)} units: Volume = ${solidStats.vol} u³ and Surface Area = ${solidStats.area} u².`,
+                    formula: `V = ${SOLIDS[solidKind].formulaVol} | SA = ${SOLIDS[solidKind].formulaArea}`,
+                    measurements: `Scale a=${solidScale.toFixed(1)} | Volume=${solidStats.vol} u³ | Area=${solidStats.area} u²`,
+                    stepsTaken: [
+                      `Selected 3D polyhedron/solid: ${SOLIDS[solidKind].label}.`,
+                      `Adjusted characteristic radius/edge scale to ${solidScale.toFixed(1)} units.`,
+                      `Verified ${SOLIDS[solidKind].euler} and computed volume/surface area.`,
+                    ],
+                    snapshotDataUrl: polySnapshotRef.current?.() ?? undefined,
                   })
                 }
-                className="w-full py-2 rounded-xl bg-primary text-primary-foreground text-xs font-semibold flex items-center justify-center gap-2"
+                className="py-2 px-3 rounded-xl border border-border bg-card hover:bg-muted text-foreground text-xs font-semibold flex items-center justify-center gap-1.5 whitespace-nowrap"
               >
-                <Save size={14} />
-                <span>{saving ? 'Saving...' : 'Save Geometry Study'}</span>
+                <FileDown size={14} />
+                <span>PDF Report</span>
               </button>
-            )}
+            </div>
           </div>
         </div>
       )}
@@ -629,6 +700,46 @@ export default function MathLabSuite() {
             <p className="text-xs font-mono text-muted-foreground">
               Identity check: sin²θ + cos²θ = {(sinVal * sinVal + cosVal * cosVal).toFixed(4)}
             </p>
+            <div className="flex flex-wrap gap-2">
+              {canSave && (
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() =>
+                    saveResult({
+                      experimentTitle: `Unit Circle Trig: θ = ${angleDeg}°`,
+                      outcome: `sin(${angleDeg}°)=${sinVal.toFixed(4)}, cos(${angleDeg}°)=${cosVal.toFixed(4)}, tan(${angleDeg}°)=${Number.isFinite(tanVal) ? tanVal.toFixed(3) : '∞'}`,
+                      formula: 'sin²θ + cos²θ = 1',
+                      measurements: `θ=${angleDeg}° (${angleRad.toFixed(3)} rad)`,
+                    })
+                  }
+                  className="flex-1 py-2 px-3 rounded-xl bg-primary text-primary-foreground text-xs font-semibold flex items-center justify-center gap-1.5 whitespace-nowrap"
+                >
+                  <Save size={14} />
+                  <span>{saving ? 'Saving...' : 'Save Trig Study'}</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() =>
+                  downloadPdfReport({
+                    experimentTitle: `Unit Circle Trigonometry: θ = ${angleDeg}°`,
+                    outcome: `At θ=${angleDeg}° (${(angleDeg / 180).toFixed(2)}π rad), sin(θ)=${sinVal.toFixed(4)}, cos(θ)=${cosVal.toFixed(4)}, tan(θ)=${Number.isFinite(tanVal) ? tanVal.toFixed(3) : 'undefined'}. Pythagorean identity verified: sin²θ+cos²θ=${(sinVal * sinVal + cosVal * cosVal).toFixed(4)}.`,
+                    formula: 'sin²θ + cos²θ = 1, tanθ = sinθ / cosθ',
+                    measurements: `θ=${angleDeg}° | sin=${sinVal.toFixed(4)} | cos=${cosVal.toFixed(4)}`,
+                    stepsTaken: [
+                      `Rotated unit circle radius vector to θ = ${angleDeg}° (${angleRad.toFixed(3)} radians).`,
+                      `Measured horizontal cos(θ) projection (${cosVal.toFixed(4)}) and vertical sin(θ) projection (${sinVal.toFixed(4)}).`,
+                      `Confirmed Pythagorean trigonometric identity sin²θ + cos²θ = 1.`,
+                    ],
+                  })
+                }
+                className="py-2 px-3 rounded-xl border border-border bg-card hover:bg-muted text-foreground text-xs font-semibold flex items-center justify-center gap-1.5 whitespace-nowrap"
+              >
+                <FileDown size={14} />
+                <span>PDF Report</span>
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -668,6 +779,49 @@ export default function MathLabSuite() {
                 <Bar dataKey="freq" name="Frequency" fill="#f43f5e" radius={[6, 6, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {canSave && (
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => {
+                  const peak = [...diceCounts].sort((a, b) => b.freq - a.freq)[0];
+                  saveResult({
+                    experimentTitle: `Monte Carlo Probability (${trials} Rolls)`,
+                    outcome: `Simulated ${trials} dual-dice rolls; empirical modal sum was ${peak?.sum} (${peak?.freq} hits).`,
+                    formula: 'P(Sum = 7) = 6/36 = 16.67%',
+                    measurements: diceCounts.map((d) => `${d.sum}:${d.freq}`).join(' '),
+                  });
+                }}
+                className="py-2 px-3.5 rounded-xl bg-primary text-primary-foreground text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap"
+              >
+                <Save size={14} />
+                <span>{saving ? 'Saving...' : 'Save Probability Study'}</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                const peak = [...diceCounts].sort((a, b) => b.freq - a.freq)[0];
+                downloadPdfReport({
+                  experimentTitle: `Monte Carlo Probability (${trials} Paired Dice Trials)`,
+                  outcome: `Executed ${trials} independent trials summing two fair 6-sided dice. Peak empirical outcome was sum ${peak?.sum} occurring ${peak?.freq} times (${trials > 0 ? ((peak.freq / trials) * 100).toFixed(1) : '0'}%), illustrating convergence toward the theoretical triangular distribution.`,
+                  formula: 'E[X₁ + X₂] = 7, P(Sum = 7) = 1/6',
+                  measurements: diceCounts.map((d) => `Sum ${d.sum}: ${d.freq}`).join(' | '),
+                  stepsTaken: [
+                    `Configured stochastic Monte Carlo sample size to N = ${trials} trials.`,
+                    `Aggregated frequency histogram across sums 2 through 12.`,
+                    `Observed convergence toward mean μ = 7 as N increased.`,
+                  ],
+                });
+              }}
+              className="py-2 px-3.5 rounded-xl border border-border bg-card hover:bg-muted text-foreground text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap"
+            >
+              <FileDown size={14} />
+              <span>PDF Report</span>
+            </button>
           </div>
         </div>
       )}

@@ -4,7 +4,11 @@ import {
   SpecimenBuildResult,
   addPedestal,
   createBrainBumpTexture,
+  createTissueMicroTexture,
 } from './anatomyBuilder';
+
+const _organDummy = new THREE.Object3D();
+const _organPt = new THREE.Vector3();
 
 function buildHumanBrain(maxAniso: number): SpecimenBuildResult {
   const root = new THREE.Group();
@@ -127,6 +131,30 @@ function buildHumanBrain(maxAniso: number): SpecimenBuildResult {
   root.add(ccGroup);
   reg.registerPart('corpus_callosum', ccGroup, new THREE.Vector3(-0.65, 0.55, 0));
 
+  // Animated neural action-potential sparks propagating along cortical pathways
+  const pathwayA = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0, 0.72, -0.06),
+    new THREE.Vector3(0, 1.28, 0.02),
+    new THREE.Vector3(-0.26, 1.44, 0.25),
+    new THREE.Vector3(-0.36, 1.24, -0.25),
+    new THREE.Vector3(0, 0.94, -0.35),
+  ]);
+  const pathwayB = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0, 0.72, -0.06),
+    new THREE.Vector3(0, 1.32, 0.04),
+    new THREE.Vector3(0.28, 1.42, 0.22),
+    new THREE.Vector3(0.36, 1.2, -0.22),
+    new THREE.Vector3(0, 0.96, -0.34),
+  ]);
+  const neuralCount = 16;
+  const neuralSparks = new THREE.InstancedMesh(
+    new THREE.SphereGeometry(0.024, 10, 8),
+    new THREE.MeshBasicMaterial({ color: 0x38bdf8 }),
+    neuralCount
+  );
+  neuralSparks.frustumCulled = false;
+  root.add(neuralSparks);
+
   return {
     root,
     parts: reg.parts,
@@ -136,6 +164,16 @@ function buildHumanBrain(maxAniso: number): SpecimenBuildResult {
     updateAnimation: (elapsed: number) => {
       const pulse = 1 + Math.sin(elapsed * 2.2) * 0.012;
       root.scale.set(pulse, 1, pulse);
+      for (let i = 0; i < neuralCount; i++) {
+        const curve = i % 2 === 0 ? pathwayA : pathwayB;
+        const u = (elapsed * 0.45 + i / neuralCount) % 1;
+        curve.getPointAt(u, _organPt);
+        _organDummy.position.copy(_organPt);
+        _organDummy.scale.setScalar(0.7 + 0.55 * Math.sin(elapsed * 7 + i));
+        _organDummy.updateMatrix();
+        neuralSparks.setMatrixAt(i, _organDummy.matrix);
+      }
+      neuralSparks.instanceMatrix.needsUpdate = true;
     },
   };
 }
@@ -144,14 +182,20 @@ function buildHumanHeart(maxAniso: number): SpecimenBuildResult {
   const root = new THREE.Group();
   const reg = new PartRegistry();
   addPedestal(root, reg, maxAniso, 1.4);
+  const tissueTex = createTissueMicroTexture(maxAniso);
+  reg.textures.push(tissueTex);
 
   const muscleMat = (color: number) =>
     new THREE.MeshPhysicalMaterial({
       color,
-      roughness: 0.36,
+      roughness: 0.34,
       metalness: 0.04,
-      clearcoat: 0.6,
-      clearcoatRoughness: 0.25,
+      bumpMap: tissueTex,
+      bumpScale: 0.018,
+      clearcoat: 0.65,
+      clearcoatRoughness: 0.22,
+      sheen: 0.4,
+      sheenColor: new THREE.Color(0xfecaca),
     });
 
   // 1. Left Ventricle
@@ -256,6 +300,39 @@ function buildHumanHeart(maxAniso: number): SpecimenBuildResult {
   root.add(corGroup);
   reg.registerPart('coronary_vessels', corGroup, new THREE.Vector3(0.1, 0, 0.78));
 
+  // Oxygenated & Deoxygenated Erythrocyte Flow through Aorta & Pulmonary Trunk
+  const aorticStream = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0.12, 1.12, 0.04),
+    new THREE.Vector3(0.0, 1.46, 0.06),
+    new THREE.Vector3(0.06, 1.8, 0.08),
+    new THREE.Vector3(-0.06, 1.88, -0.06),
+    new THREE.Vector3(-0.1, 1.5, -0.2),
+  ]);
+  const venousStream = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(-0.3, 1.82, -0.04),
+    new THREE.Vector3(-0.24, 1.42, 0.02),
+    new THREE.Vector3(-0.12, 1.12, 0.14),
+    new THREE.Vector3(-0.06, 1.62, 0.12),
+    new THREE.Vector3(0.16, 1.67, -0.04),
+  ]);
+  const rbcGeo = new THREE.SphereGeometry(0.032, 10, 8);
+  rbcGeo.scale(1.15, 0.6, 1.15);
+  const artCount = 16;
+  const artFlow = new THREE.InstancedMesh(
+    rbcGeo,
+    new THREE.MeshBasicMaterial({ color: 0xfb7185 }),
+    artCount
+  );
+  artFlow.frustumCulled = false;
+  const venCount = 14;
+  const venFlow = new THREE.InstancedMesh(
+    rbcGeo,
+    new THREE.MeshBasicMaterial({ color: 0x60a5fa }),
+    venCount
+  );
+  venFlow.frustumCulled = false;
+  root.add(artFlow, venFlow);
+
   return {
     root,
     parts: reg.parts,
@@ -264,11 +341,33 @@ function buildHumanHeart(maxAniso: number): SpecimenBuildResult {
     textures: reg.textures,
     updateAnimation: (elapsed: number) => {
       const t = (elapsed * 1.18) % 1;
-      const lub = Math.exp(-Math.pow((t - 0.15) / 0.055, 2));
-      const dub = 0.65 * Math.exp(-Math.pow((t - 0.34) / 0.05, 2));
-      const s = 1 + (lub + dub) * 0.065;
-      lvMesh.scale.set(0.86 * s, 1.48 * s, 0.9 * s);
-      rvMesh.scale.set(0.92 * s, 1.28 * s, 0.78 * s);
+      const atrialBeat = Math.exp(-Math.pow((t - 0.07) / 0.048, 2));
+      const lub = Math.exp(-Math.pow((t - 0.17) / 0.055, 2));
+      const dub = 0.65 * Math.exp(-Math.pow((t - 0.36) / 0.05, 2));
+      const s = 1 + (lub + dub) * 0.075;
+      lvMesh.scale.set(0.86 * s, 1.48 * (1 - lub * 0.04 + dub * 0.03), 0.9 * s);
+      rvMesh.scale.set(0.92 * s, 1.28 * (1 - lub * 0.04), 0.78 * s);
+      atriaGroup.scale.setScalar(1 + atrialBeat * 0.11);
+
+      for (let i = 0; i < artCount; i++) {
+        const u = (elapsed * 0.42 + lub * 0.04 + i / artCount) % 1;
+        aorticStream.getPointAt(u, _organPt);
+        _organDummy.position.copy(_organPt);
+        _organDummy.scale.setScalar(0.85 + lub * 0.25);
+        _organDummy.updateMatrix();
+        artFlow.setMatrixAt(i, _organDummy.matrix);
+      }
+      artFlow.instanceMatrix.needsUpdate = true;
+
+      for (let i = 0; i < venCount; i++) {
+        const u = (elapsed * 0.34 + i / venCount) % 1;
+        venousStream.getPointAt(u, _organPt);
+        _organDummy.position.copy(_organPt);
+        _organDummy.scale.setScalar(0.9);
+        _organDummy.updateMatrix();
+        venFlow.setMatrixAt(i, _organDummy.matrix);
+      }
+      venFlow.instanceMatrix.needsUpdate = true;
     },
   };
 }
@@ -370,6 +469,28 @@ function buildHumanLungs(maxAniso: number): SpecimenBuildResult {
   root.add(diaGroup);
   reg.registerPart('diaphragm', diaGroup, new THREE.Vector3(0, -0.42, 0));
 
+  // Oxygenated Airflow Molecules descending Larynx -> Trachea -> Bronchi
+  const leftAirPath = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0, 2.34, 0),
+    new THREE.Vector3(0, 1.72, 0),
+    new THREE.Vector3(-0.24, 1.44, 0),
+    new THREE.Vector3(-0.48, 1.18, 0.02),
+  ]);
+  const rightAirPath = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0, 2.34, 0),
+    new THREE.Vector3(0, 1.72, 0),
+    new THREE.Vector3(0.24, 1.44, 0),
+    new THREE.Vector3(0.48, 1.18, 0.02),
+  ]);
+  const airCount = 18;
+  const airParticles = new THREE.InstancedMesh(
+    new THREE.SphereGeometry(0.022, 8, 8),
+    new THREE.MeshBasicMaterial({ color: 0x38bdf8 }),
+    airCount
+  );
+  airParticles.frustumCulled = false;
+  root.add(airParticles);
+
   return {
     root,
     parts: reg.parts,
@@ -378,10 +499,25 @@ function buildHumanLungs(maxAniso: number): SpecimenBuildResult {
     textures: reg.textures,
     updateAnimation: (elapsed: number) => {
       const breath = Math.sin(elapsed * 1.65);
-      const s = 1 + breath * 0.042;
-      rightGroup.scale.set(s, 1 + breath * 0.02, s);
-      leftGroup.scale.set(s, 1 + breath * 0.02, s);
-      diaGroup.position.y = 0.64 - breath * 0.04;
+      const tidal = 0.5 + 0.5 * breath;
+      const s = 1 + breath * 0.055;
+      rightGroup.scale.set(s, 1 + breath * 0.025, s);
+      leftGroup.scale.set(s, 1 + breath * 0.025, s);
+      diaGroup.position.y = 0.64 - tidal * 0.07;
+      diaMesh.scale.y = 0.48 - tidal * 0.12;
+
+      for (let i = 0; i < airCount; i++) {
+        const path = i % 2 === 0 ? leftAirPath : rightAirPath;
+        // Oscillate inward on inhale, outward on exhale
+        const phase = (elapsed * 0.52 + i / airCount) % 1;
+        const u = breath >= 0 ? phase : 1 - phase;
+        path.getPointAt(Math.min(1, Math.max(0, u)), _organPt);
+        _organDummy.position.copy(_organPt);
+        _organDummy.scale.setScalar(0.75 + tidal * 0.4);
+        _organDummy.updateMatrix();
+        airParticles.setMatrixAt(i, _organDummy.matrix);
+      }
+      airParticles.instanceMatrix.needsUpdate = true;
     },
   };
 }

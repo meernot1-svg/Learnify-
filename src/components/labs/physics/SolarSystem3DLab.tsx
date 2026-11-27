@@ -1,9 +1,84 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { Globe, Pause, Play, RotateCcw, Save } from 'lucide-react';
+import { FileDown, Globe, Pause, Play, RotateCcw, Save } from 'lucide-react';
 import { createThreeViewport, disposeObject3D } from '../threeHelpers';
 import { useSaveLabResult } from '../useSaveLabResult';
 import { cn } from '../../../lib/utils';
+
+function createPlanetTexture(id: string, baseCss: string): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  if (ctx) {
+    ctx.fillStyle = baseCss;
+    ctx.fillRect(0, 0, 256, 128);
+
+    if (id === 'sun') {
+      const grad = ctx.createLinearGradient(0, 0, 256, 128);
+      grad.addColorStop(0, '#f97316');
+      grad.addColorStop(0.5, '#facc15');
+      grad.addColorStop(1, '#ea580c');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, 256, 128);
+      for (let i = 0; i < 90; i++) {
+        ctx.fillStyle = i % 2 === 0 ? 'rgba(254, 240, 138, 0.35)' : 'rgba(194, 65, 12, 0.35)';
+        ctx.beginPath();
+        ctx.arc((i * 41) % 256, (i * 29) % 128, 3 + (i % 6), 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else if (id === 'earth') {
+      ctx.fillStyle = '#1d4ed8';
+      ctx.fillRect(0, 0, 256, 128);
+      // Continents
+      ctx.fillStyle = '#15803d';
+      [
+        [45, 50, 28, 20],
+        [120, 42, 34, 26],
+        [185, 72, 22, 18],
+        [75, 88, 18, 16],
+      ].forEach(([cx, cy, rx, ry]) => {
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, rx, ry, 0.3, 0, Math.PI * 2);
+        ctx.fill();
+      });
+      // Clouds & polar caps
+      ctx.fillStyle = 'rgba(248, 250, 252, 0.85)';
+      ctx.fillRect(0, 0, 256, 10);
+      ctx.fillRect(0, 118, 256, 10);
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.32)';
+      for (let i = 0; i < 16; i++) {
+        ctx.beginPath();
+        ctx.ellipse((i * 37) % 256, 20 + ((i * 19) % 88), 20, 4, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else if (id === 'jupiter' || id === 'saturn') {
+      const bands = id === 'jupiter'
+        ? ['#9a3412', '#fdba74', '#b45309', '#fed7aa', '#7c2d12', '#e5b887']
+        : ['#ca8a04', '#fef08a', '#d97706', '#fde68a', '#b45309'];
+      for (let y = 0; y < 128; y += 8) {
+        ctx.fillStyle = bands[(y / 8) % bands.length];
+        ctx.fillRect(0, y, 256, 8);
+      }
+      if (id === 'jupiter') {
+        ctx.fillStyle = '#dc2626';
+        ctx.beginPath();
+        ctx.ellipse(150, 78, 16, 9, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else {
+      for (let i = 0; i < 45; i++) {
+        ctx.fillStyle = 'rgba(255,255,255,0.12)';
+        ctx.beginPath();
+        ctx.arc((i * 47) % 256, (i * 31) % 128, 3 + (i % 5), 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
 
 interface PlanetSpec {
   id: string;
@@ -169,15 +244,28 @@ export default function SolarSystem3DLab() {
   const [webglError, setWebglError] = useState<boolean>(false);
 
   const mountRef = useRef<HTMLDivElement>(null);
+  const captureSnapshotRef = useRef<(() => string | null) | null>(null);
   const stateRef = useRef({ playing, speedMult, showOrbits, selectedId });
   stateRef.current = { playing, speedMult, showOrbits, selectedId };
 
-  const { saveResult, saving, feedback, canSave } = useSaveLabResult('physics');
+  const {
+    saveResult,
+    downloadPdfReport,
+    recordStep,
+    recordedSteps,
+    saving,
+    feedback,
+    canSave,
+  } = useSaveLabResult('physics');
 
   const selectedPlanet = useMemo(
     () => PLANETS.find((p) => p.id === selectedId) ?? PLANETS[3],
     [selectedId]
   );
+
+  useEffect(() => {
+    recordStep(`Observed ${selectedPlanet.name} (${selectedPlanet.distanceAU}, gravity ${selectedPlanet.gravity}).`);
+  }, [selectedPlanet.id, selectedPlanet.name, selectedPlanet.distanceAU, selectedPlanet.gravity, recordStep]);
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -197,9 +285,11 @@ export default function SolarSystem3DLab() {
     }
     setWebglError(false);
 
-    const { scene, camera, renderer, controls, afterDraw, dispose } = ctx;
+    const { scene, camera, renderer, controls, afterDraw, captureSnapshot, dispose } = ctx;
+    captureSnapshotRef.current = captureSnapshot;
     const orrery = new THREE.Group();
     scene.add(orrery);
+    const createdTextures: THREE.CanvasTexture[] = [];
 
     // Background Starfield
     const starPositions = new Float32Array(700 * 3);
@@ -226,33 +316,51 @@ export default function SolarSystem3DLab() {
     const clickableMeshes: THREE.Object3D[] = [];
     const bodyNodes: { spec: PlanetSpec; pivot: THREE.Group; mesh: THREE.Mesh; angle: number }[] = [];
     let moonPivot: THREE.Group | null = null;
+    let sunCorona: THREE.Mesh | null = null;
 
     PLANETS.forEach((spec, idx) => {
       const pivot = new THREE.Group();
       const angle = idx * 0.95;
       orrery.add(pivot);
 
+      const tex = createPlanetTexture(spec.id, spec.cssColor);
+      createdTextures.push(tex);
+
       const mat =
         spec.id === 'sun'
-          ? new THREE.MeshBasicMaterial({ color: spec.color })
+          ? new THREE.MeshBasicMaterial({ map: tex })
           : new THREE.MeshStandardMaterial({
-              color: spec.color,
-              roughness: 0.55,
-              metalness: 0.1,
+              map: tex,
+              roughness: spec.id === 'earth' ? 0.38 : 0.62,
+              metalness: 0.08,
             });
 
-      const mesh = new THREE.Mesh(new THREE.SphereGeometry(spec.radius, 28, 22), mat);
+      const mesh = new THREE.Mesh(new THREE.SphereGeometry(spec.radius, 32, 24), mat);
       mesh.position.x = spec.orbitRadius;
       mesh.userData.planetId = spec.id;
       clickableMeshes.push(mesh);
       pivot.add(mesh);
+
+      if (spec.id === 'sun') {
+        sunCorona = new THREE.Mesh(
+          new THREE.SphereGeometry(spec.radius * 1.18, 28, 22),
+          new THREE.MeshBasicMaterial({
+            color: 0xf59e0b,
+            transparent: true,
+            opacity: 0.22,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+          })
+        );
+        pivot.add(sunCorona);
+      }
 
       if (spec.id === 'earth') {
         moonPivot = new THREE.Group();
         moonPivot.position.x = spec.orbitRadius;
         const moon = new THREE.Mesh(
           new THREE.SphereGeometry(0.11, 16, 12),
-          new THREE.MeshStandardMaterial({ color: 0xcbd5e1, roughness: 0.8 })
+          new THREE.MeshStandardMaterial({ color: 0xcbd5e1, roughness: 0.85 })
         );
         moon.position.x = 0.72;
         moonPivot.add(moon);
@@ -261,13 +369,13 @@ export default function SolarSystem3DLab() {
 
       if (spec.hasRings) {
         const ring = new THREE.Mesh(
-          new THREE.RingGeometry(spec.radius * 1.35, spec.radius * 2.15, 48),
+          new THREE.RingGeometry(spec.radius * 1.35, spec.radius * 2.15, 56),
           new THREE.MeshStandardMaterial({
             color: 0xe5c97a,
             side: THREE.DoubleSide,
             transparent: true,
-            opacity: 0.75,
-            roughness: 0.7,
+            opacity: 0.78,
+            roughness: 0.65,
           })
         );
         ring.rotation.x = Math.PI / 2 - 0.38;
@@ -309,6 +417,7 @@ export default function SolarSystem3DLab() {
 
     const clock = new THREE.Clock();
     let mounted = true;
+    let sunPulseElapsed = 0;
     const tick = () => {
       if (!mounted) return;
       const dt = Math.min(clock.getDelta(), 0.08);
@@ -319,6 +428,7 @@ export default function SolarSystem3DLab() {
       });
 
       if (pl) {
+        sunPulseElapsed += dt;
         bodyNodes.forEach((node) => {
           node.angle += dt * node.spec.speed * sm * 0.6;
           node.pivot.rotation.y = node.angle;
@@ -326,6 +436,10 @@ export default function SolarSystem3DLab() {
         });
         if (moonPivot) {
           moonPivot.rotation.y += dt * 2.2 * sm;
+        }
+        if (sunCorona) {
+          const s = 1 + Math.sin(sunPulseElapsed * 2.5) * 0.035;
+          sunCorona.scale.setScalar(s);
         }
       }
 
@@ -337,7 +451,9 @@ export default function SolarSystem3DLab() {
 
     return () => {
       mounted = false;
+      captureSnapshotRef.current = null;
       renderer.domElement.removeEventListener('click', handleClick);
+      createdTextures.forEach((t) => t.dispose());
       disposeObject3D(orrery);
       dispose();
     };
@@ -476,24 +592,49 @@ export default function SolarSystem3DLab() {
           </div>
 
           <div className="space-y-2">
-            {canSave && (
+            <div className="flex flex-wrap gap-2">
+              {canSave && (
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() =>
+                    saveResult({
+                      experimentTitle: `${selectedPlanet.name} Planetary Study`,
+                      outcome: selectedPlanet.facts,
+                      formula: 'T² = (4π² / GM) · a³',
+                      measurements: `Distance: ${selectedPlanet.distanceAU} | g: ${selectedPlanet.gravity} | Period: ${selectedPlanet.orbitalPeriod}`,
+                    })
+                  }
+                  className="flex-1 py-2.5 px-3 rounded-xl bg-primary text-primary-foreground text-xs font-semibold flex items-center justify-center gap-1.5 hover:opacity-90 disabled:opacity-50 whitespace-nowrap"
+                >
+                  <Save size={14} />
+                  <span>{saving ? 'Saving...' : 'Save Lab'}</span>
+                </button>
+              )}
               <button
                 type="button"
-                disabled={saving}
                 onClick={() =>
-                  saveResult({
+                  downloadPdfReport({
                     experimentTitle: `${selectedPlanet.name} Planetary Study`,
                     outcome: selectedPlanet.facts,
                     formula: 'T² = (4π² / GM) · a³',
-                    measurements: `Distance: ${selectedPlanet.distanceAU} | g: ${selectedPlanet.gravity} | Period: ${selectedPlanet.orbitalPeriod}`,
+                    measurements: `Distance: ${selectedPlanet.distanceAU} | Surface Gravity: ${selectedPlanet.gravity} | Period: ${selectedPlanet.orbitalPeriod} | Moons: ${selectedPlanet.moons} | Time Warp: ${speedMult.toFixed(1)}x`,
+                    stepsTaken:
+                      recordedSteps.length > 0
+                        ? recordedSteps
+                        : [
+                            `Initialized 3D Solar System orbital simulation.`,
+                            `Observed ${selectedPlanet.name} orbital motion at ${selectedPlanet.distanceAU}.`,
+                          ],
+                    snapshotDataUrl: captureSnapshotRef.current?.() || undefined,
                   })
                 }
-                className="w-full py-2.5 rounded-xl bg-primary text-primary-foreground text-xs font-semibold flex items-center justify-center gap-2 hover:opacity-90 disabled:opacity-50"
+                className="flex-1 py-2.5 px-3 rounded-xl bg-emerald-600 text-white text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-emerald-500 whitespace-nowrap"
               >
-                <Save size={14} />
-                <span>{saving ? 'Saving...' : 'Save Celestial Log'}</span>
+                <FileDown size={14} />
+                <span>PDF Report</span>
               </button>
-            )}
+            </div>
             {feedback && (
               <p className="text-xs text-emerald-600 dark:text-emerald-400">{feedback.text}</p>
             )}

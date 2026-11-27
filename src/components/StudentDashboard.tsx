@@ -16,6 +16,7 @@ import {
   Download,
   ExternalLink,
   FileCheck,
+  FileDown,
   FileQuestion,
   FileText,
   FlaskConical,
@@ -69,6 +70,7 @@ import {
   UserProfile,
 } from '../types';
 import { cn } from '../lib/utils';
+import { downloadPortfolioLabReportPdf, downloadSingleLabReportPdf } from '../lib/pdfLabReport';
 import { MaterialViewer } from './Dashboard';
 import StudyReminders from './StudyReminders';
 import WeeklyStudyActivity, { WeeklyStudyActivityEntry } from './WeeklyStudyActivity';
@@ -1790,22 +1792,40 @@ export default function StudentDashboard() {
           <section className="bg-card border border-border rounded-2xl p-6 space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <h2 className="text-base font-semibold text-foreground">Learning Archive</h2>
-              <div className="flex items-center gap-1 p-1 bg-muted rounded-xl">
-                {(['all', 'quizzes', 'labs'] as const).map((tab) => (
+              <div className="flex flex-wrap items-center gap-2">
+                {labResults.length > 0 && (
                   <button
-                    key={tab}
                     type="button"
-                    onClick={() => setArchiveTab(tab)}
-                    className={cn(
-                      'px-2.5 py-1 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0',
-                      archiveTab === tab
-                        ? 'bg-card text-foreground shadow-sm'
-                        : 'text-muted-foreground hover:text-foreground'
-                    )}
+                    onClick={() =>
+                      downloadPortfolioLabReportPdf(labResults, {
+                        studentName: profile?.displayName || profile?.fullName || undefined,
+                        studentEmail: user?.email || undefined,
+                      })
+                    }
+                    className="px-2.5 py-1.5 rounded-xl border border-border bg-muted/50 hover:bg-muted text-xs font-semibold text-foreground flex items-center gap-1.5 whitespace-nowrap transition-colors"
+                    title="Download all saved lab experiments as one formatted PDF report"
                   >
-                    {tab === 'all' ? 'All' : tab === 'quizzes' ? 'Quizzes' : 'Labs'}
+                    <FileDown size={13} className="text-primary" />
+                    <span>PDF Report</span>
                   </button>
-                ))}
+                )}
+                <div className="flex items-center gap-1 p-1 bg-muted rounded-xl">
+                  {(['all', 'quizzes', 'labs'] as const).map((tab) => (
+                    <button
+                      key={tab}
+                      type="button"
+                      onClick={() => setArchiveTab(tab)}
+                      className={cn(
+                        'px-2.5 py-1 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0',
+                        archiveTab === tab
+                          ? 'bg-card text-foreground shadow-sm'
+                          : 'text-muted-foreground hover:text-foreground'
+                      )}
+                    >
+                      {tab === 'all' ? 'All' : tab === 'quizzes' ? 'Quizzes' : 'Labs'}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 
@@ -1886,13 +1906,31 @@ export default function StudentDashboard() {
                           {item.scoreLabel} ({item.pct}%)
                         </span>
                       ) : (
-                        <button
-                          type="button"
-                          onClick={() => navigate(item.route)}
-                          className="text-xs font-medium text-primary hover:underline whitespace-nowrap"
-                        >
-                          Open
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const lab = labResults.find((r) => r.id === item.id);
+                              if (!lab) return;
+                              downloadSingleLabReportPdf(lab, {
+                                studentName: profile?.displayName || profile?.fullName || undefined,
+                                studentEmail: user?.email || undefined,
+                              });
+                            }}
+                            title="Download PDF lab report"
+                            className="px-2 py-1 rounded-lg border border-border bg-muted/50 hover:bg-muted text-[11px] font-semibold text-foreground flex items-center gap-1 whitespace-nowrap"
+                          >
+                            <FileDown size={12} className="text-primary" />
+                            <span>PDF</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => navigate(item.route)}
+                            className="text-xs font-medium text-primary hover:underline whitespace-nowrap"
+                          >
+                            Open
+                          </button>
+                        </>
                       )}
                       <button
                         type="button"

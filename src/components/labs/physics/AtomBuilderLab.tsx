@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Minus, Plus, RotateCcw, Save } from 'lucide-react';
+import { FileDown, Minus, Plus, RotateCcw, Save } from 'lucide-react';
 import { elements } from '../../../lib/elementData';
 import { useSaveLabResult } from '../useSaveLabResult';
 import { cn } from '../../../lib/utils';
@@ -22,7 +22,7 @@ export default function AtomBuilderLab() {
   const [neutrons, setNeutrons] = useState<number>(6);
   const [electrons, setElectrons] = useState<number>(6);
 
-  const { saveResult, saving, feedback, canSave } = useSaveLabResult('physics');
+  const { saveResult, downloadPdfReport, saving, feedback, canSave } = useSaveLabResult('physics');
 
   const element = useMemo(
     () => elements.find((e) => e.number === protons) ?? elements[0],
@@ -87,7 +87,7 @@ export default function AtomBuilderLab() {
         {/* Bohr Model Visualization */}
         <div className="xl:col-span-7 rounded-2xl bg-slate-950 border border-border p-4 flex flex-col items-center justify-center relative min-h-[380px]">
           <svg viewBox="0 0 360 360" className="w-full max-w-[360px] h-[340px]">
-            {/* Concentric Electron Shells */}
+            {/* Concentric Orbiting Electron Shells */}
             {shells.map((count, sIdx) => {
               const r = 44 + sIdx * 24;
               return (
@@ -101,12 +101,22 @@ export default function AtomBuilderLab() {
                     strokeWidth="1.2"
                     strokeDasharray="3 3"
                   />
-                  {Array.from({ length: count }, (_, eIdx) => {
-                    const angle = (eIdx / count) * Math.PI * 2 - Math.PI / 2;
-                    const ex = 180 + Math.cos(angle) * r;
-                    const ey = 180 + Math.sin(angle) * r;
-                    return <circle key={eIdx} cx={ex} cy={ey} r="4.2" fill="#38bdf8" />;
-                  })}
+                  <g>
+                    <animateTransform
+                      attributeName="transform"
+                      type="rotate"
+                      from={`${sIdx % 2 === 0 ? 0 : 360} 180 180`}
+                      to={`${sIdx % 2 === 0 ? 360 : 0} 180 180`}
+                      dur={`${6 + sIdx * 2.5}s`}
+                      repeatCount="indefinite"
+                    />
+                    {Array.from({ length: count }, (_, eIdx) => {
+                      const angle = (eIdx / count) * Math.PI * 2 - Math.PI / 2;
+                      const ex = 180 + Math.cos(angle) * r;
+                      const ey = 180 + Math.sin(angle) * r;
+                      return <circle key={eIdx} cx={ex} cy={ey} r="4.2" fill="#38bdf8" />;
+                    })}
+                  </g>
                 </g>
               );
             })}
@@ -222,24 +232,46 @@ export default function AtomBuilderLab() {
             </div>
           </div>
 
-          {canSave && (
+          <div className="flex flex-wrap gap-2">
+            {canSave && (
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() =>
+                  saveResult({
+                    experimentTitle: `Atom Model: ${element.name}-${massNumber}`,
+                    outcome: `${element.symbol} (${protons}p, ${neutrons}n, ${electrons}e) · ${stabilityLabel}`,
+                    formula: `Z = ${protons}, A = ${massNumber}, Shells: ${shells.join('-')}`,
+                    measurements: `Charge: ${netCharge >= 0 ? '+' : ''}${netCharge}`,
+                  })
+                }
+                className="flex-1 py-2.5 px-3 rounded-xl bg-primary text-primary-foreground text-xs font-semibold flex items-center justify-center gap-1.5 hover:opacity-90 whitespace-nowrap"
+              >
+                <Save size={14} />
+                <span>{saving ? 'Saving...' : 'Save Lab'}</span>
+              </button>
+            )}
             <button
               type="button"
-              disabled={saving}
               onClick={() =>
-                saveResult({
+                downloadPdfReport({
                   experimentTitle: `Atom Model: ${element.name}-${massNumber}`,
-                  outcome: `${element.symbol} (${protons}p, ${neutrons}n, ${electrons}e) · ${stabilityLabel}`,
-                  formula: `Z = ${protons}, A = ${massNumber}, Shells: ${shells.join('-')}`,
-                  measurements: `Charge: ${netCharge >= 0 ? '+' : ''}${netCharge}`,
+                  outcome: `Assembled ${element.name} (${element.symbol}) isotope mass ${massNumber} with ${protons}p⁺, ${neutrons}n⁰, ${electrons}e⁻ (${stabilityLabel}).`,
+                  formula: `Z = ${protons}, A = ${massNumber}, Electron Config Shells: ${shells.join('–') || '0'}`,
+                  measurements: `Net Charge: ${netCharge === 0 ? 'Neutral (0)' : netCharge > 0 ? `+${netCharge} Cation` : `${netCharge} Anion`} | Stability: ${stabilityLabel}`,
+                  stepsTaken: [
+                    `Set atomic number Z = ${protons} (${element.name}).`,
+                    `Adjusted neutron count to ${neutrons} (mass number A = ${massNumber}) and inspected nuclear stability.`,
+                    `Configured ${electrons} orbital electrons across ${shells.length} Bohr shells (${shells.join('–') || '0'}).`,
+                  ],
                 })
               }
-              className="w-full py-2.5 rounded-xl bg-primary text-primary-foreground text-xs font-semibold flex items-center justify-center gap-2 hover:opacity-90"
+              className="flex-1 py-2.5 px-3 rounded-xl bg-emerald-600 text-white text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-emerald-500 whitespace-nowrap"
             >
-              <Save size={14} />
-              <span>{saving ? 'Saving...' : 'Save Atomic Configuration'}</span>
+              <FileDown size={14} />
+              <span>PDF Report</span>
             </button>
-          )}
+          </div>
           {feedback && <p className="text-xs text-emerald-600 dark:text-emerald-400">{feedback.text}</p>}
         </div>
       </div>

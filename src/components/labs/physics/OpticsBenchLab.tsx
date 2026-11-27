@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Save } from 'lucide-react';
+import { FileDown, Save } from 'lucide-react';
 import { useSaveLabResult } from '../useSaveLabResult';
 import { cn } from '../../../lib/utils';
 
@@ -12,7 +12,7 @@ export default function OpticsBenchLab() {
   const [incidentAngleDeg, setIncidentAngleDeg] = useState<number>(42);
   const [refractiveIndex, setRefractiveIndex] = useState<number>(1.52);
 
-  const { saveResult, saving, feedback, canSave } = useSaveLabResult('physics');
+  const { saveResult, downloadPdfReport, saving, feedback, canSave } = useSaveLabResult('physics');
 
   // Lens / Mirror Thin-Equation Telemetry
   const opticsCalc = useMemo(() => {
@@ -390,27 +390,59 @@ export default function OpticsBenchLab() {
             </div>
           )}
 
-          {canSave && (
+          <div className="flex flex-wrap gap-2">
+            {canSave && (
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() =>
+                  saveResult({
+                    experimentTitle: `Optics Bench (${mode.replace('_', ' ')})`,
+                    outcome:
+                      mode === 'snell'
+                        ? `Snell refraction: θ₁=${incidentAngleDeg}° → θ₂=${snellCalc.theta2Deg.toFixed(1)}° (n=${refractiveIndex})`
+                        : `${opticsCalc.imageType}, magnification ${Number.isFinite(opticsCalc.mag) ? opticsCalc.mag.toFixed(2) : '∞'}×`,
+                    formula: mode === 'snell' ? 'n₁ sin θ₁ = n₂ sin θ₂' : '1/f = 1/d₀ + 1/dᵢ',
+                    measurements: `f=${focalLength} cm | d₀=${objectDistance} cm`,
+                  })
+                }
+                className="flex-1 py-2 px-3 rounded-xl bg-primary text-primary-foreground text-xs font-semibold flex items-center justify-center gap-1.5 hover:opacity-90 whitespace-nowrap"
+              >
+                <Save size={14} />
+                <span>{saving ? 'Saving...' : 'Save Lab'}</span>
+              </button>
+            )}
             <button
               type="button"
-              disabled={saving}
               onClick={() =>
-                saveResult({
+                downloadPdfReport({
                   experimentTitle: `Optics Bench (${mode.replace('_', ' ')})`,
                   outcome:
                     mode === 'snell'
-                      ? `Snell refraction: θ₁=${incidentAngleDeg}° → θ₂=${snellCalc.theta2Deg.toFixed(1)}° (n=${refractiveIndex})`
-                      : `${opticsCalc.imageType}, magnification ${Number.isFinite(opticsCalc.mag) ? opticsCalc.mag.toFixed(2) : '∞'}×`,
+                      ? `Snell refraction verified: θ₁=${incidentAngleDeg}° refracted to θ₂=${snellCalc.theta2Deg.toFixed(2)}° in medium n=${refractiveIndex.toFixed(2)}.`
+                      : mode === 'prism'
+                        ? 'Observed chromatic dispersion splitting white light across 400–700 nm spectrum.'
+                        : `${opticsCalc.imageType} (${opticsCalc.inverted ? 'Inverted' : 'Upright'}), magnification ${Number.isFinite(opticsCalc.mag) ? opticsCalc.mag.toFixed(2) : '∞'}× at dᵢ=${Number.isFinite(opticsCalc.di) ? `${opticsCalc.di.toFixed(1)} cm` : '∞'}.`,
                   formula: mode === 'snell' ? 'n₁ sin θ₁ = n₂ sin θ₂' : '1/f = 1/d₀ + 1/dᵢ',
-                  measurements: `f=${focalLength} cm | d₀=${objectDistance} cm`,
+                  measurements:
+                    mode === 'snell'
+                      ? `θ₁ = ${incidentAngleDeg}° | θ₂ = ${snellCalc.theta2Deg.toFixed(2)}° | n₂ = ${refractiveIndex.toFixed(2)}`
+                      : `Focal length f = ${focalLength} cm | Object distance d₀ = ${objectDistance} cm`,
+                  stepsTaken: [
+                    `Configured Optical Bench in ${mode.replace('_', ' ')} mode.`,
+                    mode === 'snell'
+                      ? `Set incident angle θ₁=${incidentAngleDeg}° and refractive index n₂=${refractiveIndex.toFixed(2)}.`
+                      : `Positioned object at d₀=${objectDistance} cm with focal length f=${focalLength} cm.`,
+                    `Traced principal light rays and verified image/refraction metrics.`,
+                  ],
                 })
               }
-              className="w-full py-2 rounded-xl bg-primary text-primary-foreground text-xs font-semibold flex items-center justify-center gap-2 hover:opacity-90"
+              className="flex-1 py-2 px-3 rounded-xl bg-emerald-600 text-white text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-emerald-500 whitespace-nowrap"
             >
-              <Save size={14} />
-              <span>{saving ? 'Saving...' : 'Save Optics Result'}</span>
+              <FileDown size={14} />
+              <span>PDF Report</span>
             </button>
-          )}
+          </div>
           {feedback && <p className="text-xs text-emerald-600 dark:text-emerald-400">{feedback.text}</p>}
         </div>
       </div>

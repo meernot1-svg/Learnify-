@@ -474,6 +474,7 @@ export default function VirtualLab({
   );
   const [anatomySearch, setAnatomySearch] = useState("");
   const [anatomyCategory, setAnatomyCategory] = useState<OrganismCategory | "all">("all");
+  const [anatomyInlineMode, setAnatomyInlineMode] = useState<"viewport" | "catalog">("viewport");
 
   React.useEffect(() => {
     if (initialViewMode) {
@@ -484,12 +485,15 @@ export default function VirtualLab({
   React.useEffect(() => {
     if (initialOrganism) {
       setSelectedAnatomy(initialOrganism);
+      setAnatomyInlineMode("viewport");
     }
   }, [initialOrganism]);
 
   const [hoveredItem, setHoveredItem] = useState<string | null>(null);
   const [beaker, setBeaker] = useState<Substance[]>([]);
-  const [activeTool, setActiveTool] = useState<string | null>(null);
+  const [activeTool, setActiveTool] = useState<string | null>(
+    (initialSubject || "chemistry") === "biology" ? "anatomy_mapper" : null
+  );
   const [vesselType, setVesselType] = useState<"beaker" | "test-tube">(
     "beaker",
   );
@@ -803,6 +807,12 @@ export default function VirtualLab({
 
   const biologyApparatus = [
     {
+      id: "anatomy_mapper",
+      name: "Anatomy 3D",
+      icon: <Box size={18} />,
+      description: "Inspect 103 interactive 3D anatomical models & organs.",
+    },
+    {
       id: "microscope",
       name: "Compound Microscope",
       icon: <Microscope size={18} />,
@@ -823,12 +833,6 @@ export default function VirtualLab({
         </div>
       ),
       description: "Isolate DNA from samples.",
-    },
-    {
-      id: "anatomy_mapper",
-      name: "Anatomy Mapper",
-      icon: <LayoutGrid size={18} />,
-      description: "Map physiological structures.",
     },
     {
       id: "scalpel",
@@ -1349,7 +1353,7 @@ export default function VirtualLab({
     }
   };
 
-  const resetBeaker = () => {
+  const resetBeaker = (nextSubject?: Subject) => {
     setBeaker([]);
     setDnaExtractionStage("none");
     setIsDnaPrecipitating(false);
@@ -1359,7 +1363,7 @@ export default function VirtualLab({
     setBalancedEquation(null);
     setReactionExplanation(null);
     setShowReactionDialog(false);
-    setActiveTool(null);
+    setActiveTool((nextSubject ?? subject) === "biology" ? "anatomy_mapper" : null);
   };
 
   return (
@@ -1390,8 +1394,8 @@ export default function VirtualLab({
         {[
           { id: "periodic", icon: <LayoutGrid size={16} />, label: "Table" },
           { id: "lab", icon: <FlaskRound size={16} />, label: "Lab" },
+          { id: "anatomy", icon: <Box size={16} />, label: "Anatomy 3D" },
           { id: "guides", icon: <BookIcon size={16} />, label: "Guides" },
-          { id: "anatomy", icon: <Users size={16} />, label: "Anatomy" },
           { id: "molecules", icon: <Search size={16} />, label: "Molecules" },
           { id: "balancer", icon: <Microscope size={16} />, label: "Balancer" },
           { id: "molarmass", icon: <Info size={16} />, label: "Molar Mass" },
@@ -1449,7 +1453,7 @@ export default function VirtualLab({
               )}
             >
               {item.icon}
-              <span className="hidden sm:inline">{item.label}</span>
+              <span className={item.id === "anatomy" ? "inline" : "hidden sm:inline"}>{item.label}</span>
             </button>
           ))}
       </div>
@@ -1505,8 +1509,9 @@ export default function VirtualLab({
             <button
               key={sub.id}
               onClick={() => {
-                setSubject(sub.id as Subject);
-                resetBeaker();
+                const nextSub = sub.id as Subject;
+                setSubject(nextSub);
+                resetBeaker(nextSub);
               }}
               className={cn(
                 "flex items-center gap-2 px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-widest transition-all border",
@@ -2085,7 +2090,7 @@ export default function VirtualLab({
                 </button>
 
                 <button
-                  onClick={resetBeaker}
+                  onClick={() => resetBeaker()}
                   className="w-full flex items-center justify-center gap-3 p-4 bg-muted hover:bg-muted/80 text-muted-foreground rounded-2xl text-xs font-black uppercase tracking-widest transition-all mb-4"
                 >
                   <RotateCcw size={16} />
@@ -2124,7 +2129,10 @@ export default function VirtualLab({
             </div>
 
             {/* Main Workspace */}
-            <div className="flex-1 p-12 bg-[#020617] relative flex flex-col items-center justify-center overflow-hidden">
+            <div className={cn(
+              "flex-1 bg-[#020617] relative flex flex-col items-center justify-center overflow-hidden",
+              subject === "biology" && activeTool === "anatomy_mapper" ? "p-4 sm:p-6" : "p-6 sm:p-12"
+            )}>
               {/* Futuristic Background Decor */}
               <div className="absolute inset-0 opacity-20 pointer-events-none">
                 <div className="absolute top-0 left-0 w-full h-full bg-[radial-gradient(circle_at_50%_50%,#1e293b_0%,transparent_100%)]" />
@@ -2894,107 +2902,153 @@ export default function VirtualLab({
                 ) : (subject === "biology" && activeTool !== "dna_kit") ? (
                   <motion.div
                     key="biology-workspace"
-                    initial={{ opacity: 0, scale: 0.9 }}
+                    initial={{ opacity: 0, scale: 0.96 }}
                     animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 1.1 }}
-                    className="w-full h-full flex flex-col items-center justify-center z-10 p-10"
+                    exit={{ opacity: 0, scale: 0.98 }}
+                    className={cn(
+                      "w-full h-full flex flex-col items-center justify-center z-10",
+                      activeTool === "anatomy_mapper" ? "p-1 sm:p-2" : "p-6 sm:p-10"
+                    )}
                   >
                     {activeTool === "anatomy_mapper" ? (
-                      <div className="w-full max-w-5xl h-full flex flex-col gap-4">
-                        <div className="flex flex-wrap items-center justify-between gap-3">
-                          <div>
-                            <h3 className="text-xl sm:text-2xl font-black tracking-tighter uppercase italic text-white flex items-center gap-2.5">
-                              <Box className="text-emerald-500" />
-                              3D Anatomy Suite ({ANATOMY_MODELS.length} Models)
+                      <div className="w-full h-full flex flex-col gap-3">
+                        <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-900/80 border border-white/10 rounded-2xl px-4 py-3">
+                          <div className="min-w-0">
+                            <h3 className="text-base sm:text-lg font-black tracking-tight uppercase italic text-white flex items-center gap-2">
+                              <Box className="text-emerald-400 shrink-0" size={18} />
+                              <span>3D Anatomy Lab ({ANATOMY_MODELS.length} Living Models)</span>
                             </h3>
-                            <p className="text-xs text-slate-400">
-                              Click any organism or human organ to launch interactive 3D dissection &amp; inspection.
+                            <p className="text-[11px] text-slate-400">
+                              Click any organ or body part in 3D for name, system &amp; function, or browse all {ANATOMY_MODELS.length} species.
                             </p>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => setViewMode("anatomy")}
-                            className="px-4 py-2 rounded-xl bg-emerald-500 text-slate-950 text-xs font-bold uppercase tracking-wider hover:bg-emerald-400 transition-colors shrink-0"
-                          >
-                            Open Interactive 3D Lab
-                          </button>
+                          <div className="flex flex-wrap items-center gap-2 shrink-0">
+                            <div className="flex bg-slate-950 p-1 rounded-xl border border-white/10">
+                              <button
+                                type="button"
+                                onClick={() => setAnatomyInlineMode("viewport")}
+                                className={cn(
+                                  "px-3 py-1.5 rounded-lg text-[11px] font-bold transition-colors",
+                                  anatomyInlineMode === "viewport"
+                                    ? "bg-emerald-500 text-slate-950"
+                                    : "text-slate-300 hover:text-white"
+                                )}
+                              >
+                                Live 3D View
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setAnatomyInlineMode("catalog")}
+                                className={cn(
+                                  "px-3 py-1.5 rounded-lg text-[11px] font-bold transition-colors",
+                                  anatomyInlineMode === "catalog"
+                                    ? "bg-emerald-500 text-slate-950"
+                                    : "text-slate-300 hover:text-white"
+                                )}
+                              >
+                                All {ANATOMY_MODELS.length} Models
+                              </button>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setViewMode("anatomy")}
+                              className="px-3.5 py-2 rounded-xl border border-emerald-500/40 bg-emerald-500/10 text-emerald-300 text-[11px] font-bold uppercase tracking-wider hover:bg-emerald-500 hover:text-slate-950 transition-colors"
+                            >
+                              Expanded 3D
+                            </button>
+                          </div>
                         </div>
 
-                        <div className="flex flex-wrap items-center gap-2.5">
-                          <div className="relative flex-1 min-w-[200px] max-w-sm">
-                            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                            <input
-                              type="text"
-                              value={anatomySearch}
-                              onChange={(e) => setAnatomySearch(e.target.value)}
-                              placeholder="Search 103 3D models (e.g., lion, heart, octopus)..."
-                              className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-900/90 border border-white/10 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-emerald-500"
+                        {anatomyInlineMode === "viewport" ? (
+                          <div className="w-full">
+                            <LivingAnatomyLab
+                              embedded
+                              initialOrganism={selectedAnatomy}
+                              onExit={() => setAnatomyInlineMode("catalog")}
                             />
                           </div>
-                          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 max-w-full">
-                            {CATEGORY_META.map((cat) => {
-                              const count =
-                                cat.id === "all"
-                                  ? ANATOMY_MODELS.length
-                                  : ANATOMY_MODELS.filter((m) => m.categoryKey === cat.id).length;
-                              return (
-                                <button
-                                  key={cat.id}
-                                  type="button"
-                                  onClick={() => setAnatomyCategory(cat.id)}
+                        ) : (
+                          <div className="w-full flex flex-col gap-3.5 bg-slate-950/60 border border-white/10 rounded-2xl p-4">
+                            <div className="flex flex-wrap items-center gap-2.5">
+                              <div className="relative flex-1 min-w-[200px] max-w-sm">
+                                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                                <input
+                                  type="text"
+                                  value={anatomySearch}
+                                  onChange={(e) => setAnatomySearch(e.target.value)}
+                                  placeholder="Search 103 3D models (e.g., lion, heart, octopus)..."
+                                  className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-900/90 border border-white/10 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-emerald-500"
+                                />
+                              </div>
+                              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 max-w-full">
+                                {CATEGORY_META.map((cat) => {
+                                  const count =
+                                    cat.id === "all"
+                                      ? ANATOMY_MODELS.length
+                                      : ANATOMY_MODELS.filter((m) => m.categoryKey === cat.id).length;
+                                  return (
+                                    <button
+                                      key={cat.id}
+                                      type="button"
+                                      onClick={() => setAnatomyCategory(cat.id)}
+                                      className={cn(
+                                        "px-2.5 py-1.5 rounded-lg text-[11px] font-bold whitespace-nowrap shrink-0 transition-colors",
+                                        anatomyCategory === cat.id
+                                          ? "bg-emerald-500 text-slate-950"
+                                          : "bg-slate-900/70 text-slate-300 border border-white/10 hover:text-white"
+                                      )}
+                                    >
+                                      {cat.label} ({count})
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-h-[540px] overflow-y-auto pr-1">
+                              {ANATOMY_MODELS.filter((model) => {
+                                if (anatomyCategory !== "all" && model.categoryKey !== anatomyCategory) return false;
+                                const q = anatomySearch.trim().toLowerCase();
+                                if (!q) return true;
+                                return (
+                                  model.name.toLowerCase().includes(q) ||
+                                  model.scientificName.toLowerCase().includes(q) ||
+                                  model.category.toLowerCase().includes(q)
+                                );
+                              }).map((model) => (
+                                <motion.button
+                                  key={model.id}
+                                  whileHover={{ scale: 1.015, y: -2 }}
+                                  whileTap={{ scale: 0.985 }}
+                                  onClick={() => {
+                                    setSelectedAnatomy(model.id);
+                                    setAnatomyInlineMode("viewport");
+                                  }}
                                   className={cn(
-                                    "px-2.5 py-1.5 rounded-lg text-[11px] font-bold whitespace-nowrap shrink-0 transition-colors",
-                                    anatomyCategory === cat.id
-                                      ? "bg-emerald-500 text-slate-950"
-                                      : "bg-slate-900/70 text-slate-300 border border-white/10 hover:text-white"
+                                    "p-3.5 bg-slate-900/70 border rounded-2xl flex items-center gap-3 text-left group hover:border-emerald-500/60 transition-colors",
+                                    selectedAnatomy === model.id ? "border-emerald-500/70" : "border-white/10"
                                   )}
                                 >
-                                  {cat.label} ({count})
-                                </button>
-                              );
-                            })}
+                                  <div className="w-11 h-11 rounded-xl bg-slate-900 border border-emerald-500/30 flex items-center justify-center text-emerald-400 group-hover:border-emerald-500 transition-colors shrink-0">
+                                    <model.icon size={20} strokeWidth={1.6} />
+                                  </div>
+                                  <div className="min-w-0 flex-1">
+                                    <h4 className="text-sm font-bold text-white truncate">
+                                      {model.name}
+                                    </h4>
+                                    <p className="text-[11px] text-slate-400 italic truncate">
+                                      {model.scientificName}
+                                    </p>
+                                    <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-400 mt-0.5">
+                                      {model.category} · {model.partsCount} parts
+                                    </p>
+                                  </div>
+                                  <ChevronRight size={16} className="text-slate-500 group-hover:text-emerald-400 shrink-0" />
+                                </motion.button>
+                              ))}
+                            </div>
                           </div>
-                        </div>
-
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5 max-h-[460px] overflow-y-auto pr-1">
-                          {ANATOMY_MODELS.filter((model) => {
-                            if (anatomyCategory !== "all" && model.categoryKey !== anatomyCategory) return false;
-                            const q = anatomySearch.trim().toLowerCase();
-                            if (!q) return true;
-                            return (
-                              model.name.toLowerCase().includes(q) ||
-                              model.scientificName.toLowerCase().includes(q) ||
-                              model.category.toLowerCase().includes(q)
-                            );
-                          }).map((model) => (
-                            <motion.button
-                              key={model.id}
-                              whileHover={{ scale: 1.015, y: -2 }}
-                              whileTap={{ scale: 0.985 }}
-                              onClick={() => {
-                                setSelectedAnatomy(model.id);
-                                setViewMode("anatomy");
-                              }}
-                              className="p-4 bg-slate-900/60 border border-white/10 rounded-2xl flex items-center gap-3.5 text-left group hover:border-emerald-500/50 transition-colors"
-                            >
-                              <div className="w-12 h-12 rounded-xl bg-slate-900 border border-emerald-500/30 flex items-center justify-center text-emerald-400 group-hover:border-emerald-500 transition-colors shrink-0">
-                                <model.icon size={22} strokeWidth={1.6} />
-                              </div>
-                              <div className="min-w-0 flex-1">
-                                <h4 className="text-sm font-bold text-white truncate">
-                                  {model.name}
-                                </h4>
-                                <p className="text-[11px] text-slate-400 italic truncate">
-                                  {model.scientificName}
-                                </p>
-                                <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-400 mt-0.5">
-                                  {model.category} · {model.partsCount} parts
-                                </p>
-                              </div>
-                              <ChevronRight size={16} className="text-slate-500 group-hover:text-emerald-400 shrink-0" />
-                            </motion.button>
-                          ))}
-                        </div>
+                        )}
                       </div>
                     ) : activeTool === "petri" ? (
                       <div className="w-full max-w-4xl bg-card/60 p-6 sm:p-12 rounded-3xl sm:rounded-[4rem] border border-white/5 backdrop-blur-2xl flex flex-col items-center gap-6 sm:gap-12">
@@ -3223,14 +3277,38 @@ export default function VirtualLab({
                         )}
                       </div>
                     ) : (
-                      <div className="text-center space-y-6">
-                        <Microscope
-                          size={64}
-                          className="text-emerald-500 mx-auto animate-pulse"
+                      <div className="text-center space-y-6 max-w-md mx-auto">
+                        <Box
+                          size={56}
+                          className="text-emerald-400 mx-auto"
                         />
-                        <p className="text-white/20 font-black uppercase tracking-[0.4em] italic">
-                          Bioscience Research Area
-                        </p>
+                        <div className="space-y-2">
+                          <h4 className="text-lg font-black uppercase tracking-wider text-white">
+                            Bioscience &amp; 3D Anatomy Lab
+                          </h4>
+                          <p className="text-xs text-slate-400">
+                            Launch one of the 103 interactive 3D living anatomy models or open the compound microscope from Workbench Tools.
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap items-center justify-center gap-3">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveTool("anatomy_mapper");
+                              setAnatomyInlineMode("viewport");
+                            }}
+                            className="px-4 py-2.5 rounded-xl bg-emerald-500 text-slate-950 text-xs font-bold uppercase tracking-wider hover:bg-emerald-400 transition-colors"
+                          >
+                            Launch 3D Anatomy ({ANATOMY_MODELS.length})
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setActiveTool("microscope")}
+                            className="px-4 py-2.5 rounded-xl bg-slate-900 border border-white/10 text-white text-xs font-bold uppercase tracking-wider hover:border-emerald-500/50 transition-colors"
+                          >
+                            Open Microscope
+                          </button>
+                        </div>
                       </div>
                     )}
                   </motion.div>

@@ -31,7 +31,7 @@ export default function SubjectView() {
   const subjectMeta = {
     computer: { label: 'Computer Science', icon: Binary, color: 'text-blue-500', toolLabel: 'Python Mini IDE' },
     physics: { label: 'Physics', icon: Atom, color: 'text-purple-500', toolLabel: 'Formula Sandbox' },
-    biology: { label: 'Biology', icon: Dna, color: 'text-green-500', toolLabel: 'Specimen Lab' },
+    biology: { label: 'Biology', icon: Dna, color: 'text-green-500', toolLabel: 'Biology & 3D Lab' },
     chemistry: { label: 'Chemistry', icon: Beaker, color: 'text-orange-500', toolLabel: 'Virtual Lab' }
   }[id as keyof typeof subjectMeta || 'computer'];
 
@@ -71,22 +71,26 @@ export default function SubjectView() {
           <div className="space-y-1.5">
             <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-green-600 dark:text-green-400">
               <Box size={15} />
-              <span>Interactive 3D Models &amp; Organ Functionality</span>
+              <span>103 Interactive 3D Models &amp; Organ Functionality</span>
             </div>
             <h2 className="text-xl font-bold tracking-tight">
-              3D Human Body &amp; Living Organisms Lab
+              3D Anatomy Lab Inside Biology
             </h2>
             <p className="text-sm text-muted-foreground max-w-2xl">
-              Inspect 3D anatomical models of the Human Body, Honeybee, Flowering Plant, and Bony Fish. Click any body part to view its name, biological system, and detailed functionality, or toggle X-Ray and Exploded View.
+              Inspect 103 interactive 3D anatomical models spanning the Human Body, 14 Human Organs, Mammals, Birds, Reptiles, Marine Life, Insects, Plants, and Microbes. Click any part for its name, biological system, X-Ray, and Exploded View.
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <div className="flex flex-wrap items-center gap-2 shrink-0 lg:max-w-md lg:justify-end">
             {(
               [
                 { org: 'human', label: 'Human Body' },
+                { org: 'human_brain', label: 'Brain' },
+                { org: 'human_heart', label: 'Heart' },
                 { org: 'bee', label: 'Honeybee' },
-                { org: 'plant', label: 'Flowering Plant' },
+                { org: 'plant', label: 'Plant' },
                 { org: 'fish', label: 'Bony Fish' },
+                { org: 'lion', label: 'Lion' },
+                { org: 'octopus', label: 'Octopus' },
               ] as { org: OrganismId; label: string }[]
             ).map((item) => (
               <button
@@ -97,15 +101,25 @@ export default function SubjectView() {
                   setBiologyLabMode('anatomy');
                   setActiveTab('tool');
                 }}
-                className="px-3.5 py-2 rounded-xl border border-border bg-muted/50 hover:bg-primary hover:text-primary-foreground hover:border-primary text-xs font-bold transition-all"
+                className="px-3 py-1.5 rounded-xl border border-border bg-muted/50 hover:bg-primary hover:text-primary-foreground hover:border-primary text-xs font-bold transition-all"
               >
                 {item.label}
               </button>
             ))}
             <button
               type="button"
+              onClick={() => {
+                setBiologyLabMode('anatomy');
+                setActiveTab('tool');
+              }}
+              className="px-3.5 py-1.5 rounded-xl bg-green-600 text-white hover:bg-green-500 text-xs font-bold transition-all"
+            >
+              Open All 103 in 3D
+            </button>
+            <button
+              type="button"
               onClick={() => navigate(`/anatomy-3d?organism=${biologyOrganism}`)}
-              className="px-3.5 py-2 rounded-xl border border-primary/40 bg-primary/10 text-primary hover:bg-primary hover:text-primary-foreground text-xs font-bold transition-all"
+              className="px-3.5 py-1.5 rounded-xl border border-primary/40 bg-primary/10 text-primary hover:bg-primary hover:text-primary-foreground text-xs font-bold transition-all"
             >
               Full Screen 3D
             </button>

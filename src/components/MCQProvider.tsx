@@ -22,11 +22,16 @@ import {
   Trash2,
   Edit3,
   Play,
-  BookOpen
+  BookOpen,
+  ShieldAlert,
+  ArrowRight
 } from 'lucide-react';
+import Markdown from 'react-markdown';
+import { useNavigate } from 'react-router-dom';
 import { aiService } from '../services/ai';
 import { learningDataService } from '../services/learningData';
 import { useAuth } from '../hooks/useAuth';
+import { useLanguage } from '../hooks/useLanguage';
 import { SavedQuiz } from '../types';
 import { cn } from '../lib/utils';
 
@@ -59,7 +64,11 @@ export default function MCQProvider() {
     return () => clearInterval(msgInterval);
   }, [loading]);
   const { user } = useAuth();
+  const { language } = useLanguage();
+  const navigate = useNavigate();
   const [userAnswers, setUserAnswers] = useState<Record<number, number>>({});
+  const [misconceptionReport, setMisconceptionReport] = useState('');
+  const [diagnosingMisc, setDiagnosingMisc] = useState(false);
   const [showResults, setShowResults] = useState(false);
   const [showHint, setShowHint] = useState(false);
   const [timer, setTimer] = useState(0);
@@ -183,10 +192,11 @@ export default function MCQProvider() {
             fileData.b64,
             fileData.mime,
             batchSize,
-            excludeList
+            excludeList,
+            language
           );
         } else {
-          batch = await aiService.generateMcqs(inputText, batchSize, excludeList);
+          batch = await aiService.generateMcqs(inputText, batchSize, excludeList, language);
         }
 
         let addedInPass = 0;
@@ -868,7 +878,7 @@ export default function MCQProvider() {
              <motion.div 
                initial={{ scale: 0.9, y: 20 }}
                animate={{ scale: 1, y: 0 }}
-               className="max-w-2xl w-full bg-card border border-border p-6 sm:p-12 rounded-3xl sm:rounded-[4rem] text-center shadow-4xl relative overflow-hidden"
+               className="max-w-2xl w-full max-h-[90vh] overflow-y-auto bg-card border border-border p-6 sm:p-10 rounded-3xl sm:rounded-[3rem] text-center shadow-4xl relative"
              >
                 <div className="absolute inset-0 bg-gradient-to-b from-primary/10 to-transparent opacity-20" />
                 
@@ -942,16 +952,81 @@ export default function MCQProvider() {
                       </button>
                     </div>
                   )}
+
+                  {getScore() < mcqs.length && (
+                    <div className="mb-6 p-4 rounded-2xl bg-rose-500/5 border border-rose-500/20 text-left space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 text-xs font-black text-rose-500 uppercase tracking-wider">
+                          <ShieldAlert size={14} />
+                          <span>AI Misconception Detector ({mcqs.length - getScore()} missed)</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            disabled={diagnosingMisc}
+                            onClick={async () => {
+                              setDiagnosingMisc(true);
+                              const wrongList = mcqs
+                                .map((q, idx) => ({ q, idx, chosen: userAnswers[idx] }))
+                                .filter((item) => item.chosen !== item.q.correctIndex)
+                                .slice(0, 5)
+                                .map(
+                                  (item) =>
+                                    `Q: ${item.q.question}\nStudent chose: ${item.q.options[item.chosen ?? 0]}\nCorrect: ${item.q.options[item.q.correctIndex]}`
+                                )
+                                .join('\n---\n');
+                              try {
+                                const res = await aiService.labAssistant({
+                                  action: 'misconception-diagnose',
+                                  subject: quizSubjectInput,
+                                  topic: quizTitleInput || 'Quiz Mistakes',
+                                  context: wrongList,
+                                  language,
+                                });
+                                setMisconceptionReport(res);
+                              } catch (err: unknown) {
+                                setMisconceptionReport(
+                                  err instanceof Error ? err.message : 'Unable to diagnose mistakes right now.'
+                                );
+                              } finally {
+                                setDiagnosingMisc(false);
+                              }
+                            }}
+                            className="px-3 py-1.5 rounded-xl bg-rose-500 text-white text-[11px] font-bold hover:bg-rose-600 disabled:opacity-50 cursor-pointer"
+                          >
+                            {diagnosingMisc ? 'Analyzing...' : 'Explain Mistakes & Lab Fix'}
+                          </button>
+                          {['physics', 'chemistry', 'biology', 'computer', 'math', 'electrical'].includes(
+                            quizSubjectInput
+                          ) && (
+                            <button
+                              type="button"
+                              onClick={() => navigate(`/subject/${quizSubjectInput}?tab=tool`)}
+                              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl border border-border bg-background text-[11px] font-bold hover:border-primary cursor-pointer"
+                            >
+                              <span>Open Lab</span>
+                              <ArrowRight size={12} />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      {misconceptionReport && (
+                        <div className="p-3 rounded-xl bg-background/80 border border-border prose prose-xs dark:prose-invert max-w-none max-h-48 overflow-y-auto">
+                          <Markdown>{misconceptionReport}</Markdown>
+                        </div>
+                      )}
+                    </div>
+                  )}
                   
                   <div className="flex gap-4">
                     <button 
-                      onClick={() => { setMcqs([]); setShowResults(false); setInputText(''); }}
+                      onClick={() => { setMcqs([]); setShowResults(false); setInputText(''); setMisconceptionReport(''); }}
                       className="flex-1 py-5 bg-muted rounded-2xl font-bold border border-border hover:bg-muted/80 transition-all uppercase tracking-widest text-xs"
                     >
                       Try New Topic
                     </button>
                     <button 
-                      onClick={() => { setShowResults(false); setCurrentIdx(0); setUserAnswers({}); setTimer(0); setQuizSavedId(null); setSaveFeedback(null); }}
+                      onClick={() => { setShowResults(false); setCurrentIdx(0); setUserAnswers({}); setTimer(0); setQuizSavedId(null); setSaveFeedback(null); setMisconceptionReport(''); }}
                       className="flex-1 py-5 bg-primary text-primary-foreground rounded-2xl font-bold shadow-xl shadow-primary/20 hover:scale-105 transition-all uppercase tracking-widest text-xs"
                     >
                       Retry Challenge

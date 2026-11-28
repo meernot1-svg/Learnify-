@@ -191,6 +191,8 @@ export default function AdminPanel() {
     } catch (err: any) {
       if (err?.code === 'auth/popup-blocked') {
         setAuthError('Browser blocked the sign-in popup. Please allow popups and try again.');
+      } else if (err?.code === 'auth/popup-closed-by-user' || err?.code === 'auth/cancelled-popup-request') {
+        setAuthError('Sign-in popup was closed before completing verification.');
       } else {
         setAuthError(err?.message || 'Google sign-in failed.');
       }

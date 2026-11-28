@@ -1,22 +1,53 @@
 import 'dotenv/config';
 import express from 'express';
 import crypto from 'crypto';
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
 
 const DEFAULT_OPENROUTER_MODEL = 'google/gemini-4-hydrogen';
 const FALLBACK_OPENROUTER_MODELS = [
   'google/gemini-3.8-flash',
   'google/gemini-3.5-flash-lite',
   'google/gemma-4-26b-a4b-it:free',
+  'google/gemma-4-31b-it:free',
   'openrouter/free',
 ];
 
+function redactSensitiveTokens(text: string): string {
+  return text
+    .replace(/sk-or-[A-Za-z0-9_-]{8,}/g, '[REDACTED_KEY]')
+    .replace(/sk-[A-Za-z0-9_-]{12,}/g, '[REDACTED_KEY]')
+    .replace(/AIza[A-Za-z0-9_-]{12,}/g, '[REDACTED_KEY]');
+}
+
+function normalizeEnvSecret(value: string | undefined): string {
+  const trimmed = (value || '').trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
+
 function getOpenRouterKey(): string {
-  return (process.env.OPENROUTER_API_KEY || '').trim();
+  return normalizeEnvSecret(process.env.OPENROUTER_API_KEY);
+}
+
+function getConfiguredOpenRouterModel(): string {
+  const raw = normalizeEnvSecret(process.env.OPENROUTER_MODEL);
+  if (!raw) return '';
+  if (/^(sk-|AIza|ghp_|xox[a-z]-)/i.test(raw) || /\s/.test(raw)) {
+    return '';
+  }
+  if (!/^[a-z0-9._-]+\/[a-z0-9._:-]+$/i.test(raw)) {
+    return '';
+  }
+  return raw;
 }
 
 function getGeminiKey(): string {
-  return (process.env.GEMINI_API_KEY || '').trim();
+  return normalizeEnvSecret(process.env.GEMINI_API_KEY);
 }
 
 function getGeminiClient(): GoogleGenAI {
@@ -32,6 +63,31 @@ function getGeminiClient(): GoogleGenAI {
       },
     },
   });
+}
+
+async function executeWithAiFallback<T>(
+  runOpenRouter: () => Promise<T>,
+  runGemini: () => Promise<T>
+): Promise<T> {
+  const hasOpenRouter = Boolean(getOpenRouterKey());
+  const hasGemini = Boolean(getGeminiKey());
+
+  if (!hasOpenRouter && !hasGemini) {
+    throw new Error('AI API key is not configured. Add OPENROUTER_API_KEY or GEMINI_API_KEY in Settings > Secrets.');
+  }
+
+  if (hasOpenRouter) {
+    try {
+      return await runOpenRouter();
+    } catch (openRouterErr) {
+      if (hasGemini) {
+        return await runGemini();
+      }
+      throw openRouterErr;
+    }
+  }
+
+  return await runGemini();
 }
 
 type OpenRouterContentPart =
@@ -58,15 +114,22 @@ function buildOpenRouterAttachmentPart(base64Data: string, mimeType: string): Op
   };
 }
 
-async function callOpenRouter(messages: OpenRouterMessage[], expectJson = false): Promise<string> {
+async function callOpenRouter(
+  messages: OpenRouterMessage[],
+  expectJson = false,
+  preferFast = false
+): Promise<string> {
   const apiKey = getOpenRouterKey();
   if (!apiKey) {
     throw new Error('OPENROUTER_API_KEY is not configured.');
   }
-  const configuredModel = (process.env.OPENROUTER_MODEL || '').trim();
-  const candidates = configuredModel
-    ? [configuredModel]
+  const configuredModel = getConfiguredOpenRouterModel();
+  const baseModels = preferFast
+    ? ['google/gemini-3.8-flash', 'google/gemini-3.5-flash-lite', DEFAULT_OPENROUTER_MODEL, ...FALLBACK_OPENROUTER_MODELS]
     : [DEFAULT_OPENROUTER_MODEL, ...FALLBACK_OPENROUTER_MODELS];
+  const candidates = Array.from(
+    new Set([...(configuredModel ? [configuredModel] : []), ...baseModels])
+  );
   const appUrl =
     (process.env.APP_URL || '').trim() ||
     (process.env.VERCEL_PROJECT_PRODUCTION_URL
@@ -87,30 +150,45 @@ async function callOpenRouter(messages: OpenRouterMessage[], expectJson = false)
       body.temperature = 0.3;
     }
 
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': appUrl,
-        'X-Title': 'Learnify',
-      },
-      body: JSON.stringify(body),
-    });
+    let response: Response;
+    try {
+      response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': appUrl,
+          'X-Title': 'Learnify',
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(45000),
+      });
+    } catch (networkErr) {
+      lastError = networkErr instanceof Error ? networkErr.message : 'OpenRouter network request failed.';
+      if (hasMore) continue;
+      throw new Error(redactSensitiveTokens(lastError));
+    }
 
     const payload: any = await response.json().catch(() => ({}));
     if (response.ok) {
       const content = payload?.choices?.[0]?.message?.content;
-      if (typeof content === 'string') return content;
-      if (Array.isArray(content)) {
-        return content
-          .map((part: any) => (typeof part?.text === 'string' ? part.text : ''))
-          .join('');
+      const extracted =
+        typeof content === 'string'
+          ? content
+          : Array.isArray(content)
+          ? content.map((part: any) => (typeof part?.text === 'string' ? part.text : '')).join('')
+          : '';
+      if (extracted.trim()) {
+        return extracted;
       }
-      return '';
+      lastError = 'OpenRouter returned an empty response.';
+      if (hasMore) continue;
+      throw new Error(lastError);
     }
 
-    const providerMessage = payload?.error?.message || `OpenRouter request failed (${response.status})`;
+    const providerMessage = redactSensitiveTokens(
+      String(payload?.error?.message || `OpenRouter request failed (${response.status})`)
+    );
     if (response.status === 401 || response.status === 403) {
       throw new Error('OpenRouter API key is invalid or unauthorized. Please check Settings > Secrets.');
     }
@@ -131,16 +209,18 @@ async function callOpenRouter(messages: OpenRouterMessage[], expectJson = false)
     lastError = providerMessage;
     if (
       hasMore &&
-      (response.status === 404 ||
-        providerMessage.includes('no longer available') ||
-        providerMessage.includes('not found'))
+      (response.status === 400 ||
+        response.status === 404 ||
+        response.status === 408 ||
+        response.status === 422 ||
+        response.status >= 500)
     ) {
       continue;
     }
     throw new Error(providerMessage);
   }
 
-  throw new Error(lastError);
+  throw new Error(redactSensitiveTokens(lastError));
 }
 
 function parseJsonArrayResponse(rawText: string): unknown[] {
@@ -210,14 +290,42 @@ function verifyAdminSessionToken(token: string): boolean {
   }
 }
 
+function resolveLanguageInstruction(rawLang: unknown): string {
+  switch (rawLang) {
+    case 'ur':
+      return 'Respond clearly in standard Urdu (اردو script) while keeping scientific symbols, units, and formulas accurate.';
+    case 'ur-latn':
+      return 'Respond in clear, natural Roman Urdu (Urdu written in Latin letters) while keeping scientific terms and formulas accurate.';
+    case 'sd':
+      return 'Respond clearly in standard Sindhi (سنڌي script) while preserving accurate scientific symbols and formulas.';
+    default:
+      return '';
+  }
+}
+
+const VALID_LAB_ASSISTANT_ACTIONS = new Set([
+  'experiment-plan',
+  'what-if',
+  'lab-rescue',
+  'practical-report',
+  'viva-question',
+  'viva-evaluate',
+  'misconception-diagnose',
+  'misconception-verify',
+  'local-explorer',
+  'teacher-assistant',
+  'code-debug',
+  'smart-exam',
+]);
+
 function isAllowedMimeType(mimeType: unknown): mimeType is string {
   if (typeof mimeType !== 'string') return false;
   return mimeType.startsWith('image/') || mimeType === 'application/pdf';
 }
 
 function formatAiError(err: unknown): { status: number; message: string } {
-  const raw = err instanceof Error ? err.message : String(err);
-  if (raw.includes('not configured') || raw.includes('Add OPENROUTER_API_KEY')) {
+  const raw = redactSensitiveTokens(err instanceof Error ? err.message : String(err));
+  if (raw.includes('not configured') || raw.includes('Add OPENROUTER_API_KEY') || raw.includes('Add GEMINI_API_KEY')) {
     return { status: 503, message: raw };
   }
   if (
@@ -352,13 +460,18 @@ export function createApiApp(): express.Express {
     return res.json({ valid: true });
   });
 
-  // AI provider status (boolean only, never exposes secrets)
+  // AI provider status (boolean/metadata only, never exposes secrets)
   app.get('/api/ai/status', (_req, res) => {
     const hasOpenRouter = Boolean(getOpenRouterKey());
     const hasGemini = Boolean(getGeminiKey());
     res.json({
       configured: hasOpenRouter || hasGemini,
       provider: hasOpenRouter ? 'openrouter' : hasGemini ? 'gemini' : 'none',
+      providers: {
+        openrouter: hasOpenRouter,
+        gemini: hasGemini,
+      },
+      openrouterModelMode: getConfiguredOpenRouterModel() ? 'custom' : 'default',
     });
   });
 
@@ -371,8 +484,9 @@ export function createApiApp(): express.Express {
         return res.status(400).json({ error: 'Message must be between 1 and 10,000 characters.' });
       }
 
+      const langInstruction = resolveLanguageInstruction(req.body?.language);
       const systemPrompt =
-        'You are EduAI, a friendly and helpful teaching assistant for the Learnify platform. You help students with subjects like Computer Science, Physics, Chemistry, and Biology. Be concise, clear, and encouraging.';
+        `You are EduAI, a friendly and helpful teaching assistant for the Learnify platform. You help students with subjects like Computer Science, Physics, Chemistry, Biology, Mathematics, and Electrical Engineering. Be concise, clear, and encouraging.${langInstruction ? ` ${langInstruction}` : ''}`;
 
       const normalizedHistory = rawHistory
         .filter((item: any) => item && (item.role === 'user' || item.role === 'model') && Array.isArray(item.parts))
@@ -382,31 +496,34 @@ export function createApiApp(): express.Express {
           text: String(item.parts?.[0]?.text || '').slice(0, 8000),
         }));
 
-      if (getOpenRouterKey()) {
-        const messages: OpenRouterMessage[] = [
-          { role: 'system', content: systemPrompt },
-          ...normalizedHistory.map((item) => ({
-            role: (item.role === 'model' ? 'assistant' : 'user') as 'assistant' | 'user',
-            content: item.text,
-          })),
-          { role: 'user', content: message },
-        ];
-        const text = await callOpenRouter(messages);
-        return res.json({ text });
-      }
+      const text = await executeWithAiFallback(
+        async () => {
+          const messages: OpenRouterMessage[] = [
+            { role: 'system', content: systemPrompt },
+            ...normalizedHistory.map((item) => ({
+              role: (item.role === 'model' ? 'assistant' : 'user') as 'assistant' | 'user',
+              content: item.text,
+            })),
+            { role: 'user', content: message },
+          ];
+          return await callOpenRouter(messages);
+        },
+        async () => {
+          const ai = getGeminiClient();
+          const chat = ai.chats.create({
+            model: 'gemini-4-hydrogen',
+            config: { systemInstruction: systemPrompt },
+            history: normalizedHistory.map((item) => ({
+              role: item.role,
+              parts: [{ text: item.text }],
+            })),
+          });
+          const response = await chat.sendMessage({ message });
+          return response.text || '';
+        }
+      );
 
-      const ai = getGeminiClient();
-      const chat = ai.chats.create({
-        model: 'gemini-4-hydrogen',
-        config: { systemInstruction: systemPrompt },
-        history: normalizedHistory.map((item) => ({
-          role: item.role,
-          parts: [{ text: item.text }],
-        })),
-      });
-
-      const response = await chat.sendMessage({ message });
-      return res.json({ text: response.text || '' });
+      return res.json({ text });
     } catch (err) {
       const { status, message } = formatAiError(err);
       return res.status(status).json({ error: message });
@@ -456,6 +573,7 @@ export function createApiApp(): express.Express {
         return { question, options, correctIndex };
       };
 
+      const langInstruction = resolveLanguageInstruction(req.body?.language);
       const generateBatch = async (batchCount: number, avoidList: string[]) => {
         const avoidBlock =
           avoidList.length > 0
@@ -464,73 +582,75 @@ export function createApiApp(): express.Express {
                 .join('\n- ')}`
             : '';
 
-        const promptText = `Generate exactly ${batchCount} distinct, challenging multiple-choice questions based on the following educational material:\n\n${
+        const promptText = `Generate exactly ${batchCount} distinct, challenging multiple-choice questions based on the following educational material${langInstruction ? ` (${langInstruction})` : ''}:\n\n${
           content || `Analyze the uploaded material and formulate ${batchCount} accurate MCQs.`
         }${avoidBlock}`;
 
-        if (getOpenRouterKey()) {
-          const userParts: OpenRouterContentPart[] = [];
-          if (base64Data && mimeType) {
-            userParts.push(buildOpenRouterAttachmentPart(base64Data, mimeType));
-          }
-          userParts.push({
-            type: 'text',
-            text: `${promptText}\n\nReturn ONLY a raw JSON array of ${batchCount} objects with keys: "question" (string), "options" (array of 4 strings), and "correctIndex" (integer 0-3). Do not include markdown fences or extra text.`,
-          });
+        return await executeWithAiFallback(
+          async () => {
+            const userParts: OpenRouterContentPart[] = [];
+            if (base64Data && mimeType) {
+              userParts.push(buildOpenRouterAttachmentPart(base64Data, mimeType));
+            }
+            userParts.push({
+              type: 'text',
+              text: `${promptText}\n\nReturn ONLY a raw JSON array of ${batchCount} objects with keys: "question" (string), "options" (array of 4 strings), and "correctIndex" (integer 0-3). Do not include markdown fences or extra text.`,
+            });
 
-          const text = await callOpenRouter(
-            [
-              {
-                role: 'system',
-                content:
-                  `You are an educational assessment expert. Respond strictly with valid JSON containing exactly ${batchCount} unique MCQs matching the requested schema.`,
-              },
-              { role: 'user', content: userParts },
-            ],
-            true
-          );
-          return parseJsonArrayResponse(text).map(normalizeMcq).filter(Boolean);
-        }
-
-        const ai = getGeminiClient();
-        const parts: any[] = [];
-        if (base64Data && mimeType) {
-          parts.push({
-            inlineData: {
-              mimeType,
-              data: base64Data,
-            },
-          });
-        }
-        parts.push({ text: promptText });
-
-        const response = await ai.models.generateContent({
-          model: 'gemini-4-hydrogen',
-          contents: { parts },
-          config: {
-            systemInstruction:
-              `You are an educational assessment expert. Always return exactly ${batchCount} unique multiple choice questions with 4 answer options each and a 0-based correctIndex (0 to 3).`,
-            responseMimeType: 'application/json',
-            responseSchema: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  question: { type: Type.STRING },
-                  options: {
-                    type: Type.ARRAY,
-                    items: { type: Type.STRING },
-                  },
-                  correctIndex: { type: Type.INTEGER },
+            const text = await callOpenRouter(
+              [
+                {
+                  role: 'system',
+                  content:
+                    `You are an educational assessment expert. Respond strictly with valid JSON containing exactly ${batchCount} unique MCQs matching the requested schema.`,
                 },
-                required: ['question', 'options', 'correctIndex'],
-              },
-            },
+                { role: 'user', content: userParts },
+              ],
+              true
+            );
+            return parseJsonArrayResponse(text).map(normalizeMcq).filter(Boolean);
           },
-        });
+          async () => {
+            const ai = getGeminiClient();
+            const parts: any[] = [];
+            if (base64Data && mimeType) {
+              parts.push({
+                inlineData: {
+                  mimeType,
+                  data: base64Data,
+                },
+              });
+            }
+            parts.push({ text: promptText });
 
-        const parsed = JSON.parse((response.text || '[]').trim());
-        return Array.isArray(parsed) ? parsed.map(normalizeMcq).filter(Boolean) : [];
+            const response = await ai.models.generateContent({
+              model: 'gemini-4-hydrogen',
+              contents: { parts },
+              config: {
+                systemInstruction:
+                  `You are an educational assessment expert. Always return exactly ${batchCount} unique multiple choice questions with 4 answer options each and a 0-based correctIndex (0 to 3).`,
+                responseMimeType: 'application/json',
+                responseSchema: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      question: { type: Type.STRING },
+                      options: {
+                        type: Type.ARRAY,
+                        items: { type: Type.STRING },
+                      },
+                      correctIndex: { type: Type.INTEGER },
+                    },
+                    required: ['question', 'options', 'correctIndex'],
+                  },
+                },
+              },
+            });
+
+            return parseJsonArrayResponse(response.text || '[]').map(normalizeMcq).filter(Boolean);
+          }
+        );
       };
 
       const seen = new Set(excludeQuestions.map((q) => q.trim().toLowerCase()));
@@ -573,46 +693,49 @@ export function createApiApp(): express.Express {
         return res.status(400).json({ error: 'Provide study content between 1 and 20,000 characters.' });
       }
 
-      if (getOpenRouterKey()) {
-        const text = await callOpenRouter(
-          [
-            {
-              role: 'system',
-              content:
-                'You are an educational flashcard generator. Respond strictly with a raw JSON array of 10 objects, each having "front" (string) and "back" (string). Do not include markdown fences.',
-            },
-            {
-              role: 'user',
-              content: `Generate 10 educational flashcards from the provided content:\n\n${content}`,
-            },
-          ],
-          true
-        );
-        return res.json({ flashcards: parseJsonArrayResponse(text) });
-      }
-
-      const ai = getGeminiClient();
-      const response = await ai.models.generateContent({
-        model: 'gemini-4-hydrogen',
-        contents: `Generate 10 educational flashcards from the provided content:\n\n${content}`,
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                front: { type: Type.STRING },
-                back: { type: Type.STRING },
+      const flashcards = await executeWithAiFallback(
+        async () => {
+          const text = await callOpenRouter(
+            [
+              {
+                role: 'system',
+                content:
+                  'You are an educational flashcard generator. Respond strictly with a raw JSON array of 10 objects, each having "front" (string) and "back" (string). Do not include markdown fences.',
               },
-              required: ['front', 'back'],
-            },
-          },
+              {
+                role: 'user',
+                content: `Generate 10 educational flashcards from the provided content:\n\n${content}`,
+              },
+            ],
+            true
+          );
+          return parseJsonArrayResponse(text);
         },
-      });
+        async () => {
+          const ai = getGeminiClient();
+          const response = await ai.models.generateContent({
+            model: 'gemini-4-hydrogen',
+            contents: `Generate 10 educational flashcards from the provided content:\n\n${content}`,
+            config: {
+              responseMimeType: 'application/json',
+              responseSchema: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    front: { type: Type.STRING },
+                    back: { type: Type.STRING },
+                  },
+                  required: ['front', 'back'],
+                },
+              },
+            },
+          });
+          return parseJsonArrayResponse(response.text || '[]');
+        }
+      );
 
-      const parsed = JSON.parse((response.text || '[]').trim());
-      return res.json({ flashcards: Array.isArray(parsed) ? parsed : [] });
+      return res.json({ flashcards });
     } catch (err) {
       const { status, message } = formatAiError(err);
       return res.status(status).json({ error: message });
@@ -630,21 +753,24 @@ export function createApiApp(): express.Express {
       const systemInstruction =
         'Generate comprehensive study notes based on the provided content. Use Markdown for formatting with clear headings, bullet points, and bold text for key terms.';
 
-      if (getOpenRouterKey()) {
-        const text = await callOpenRouter([
-          { role: 'system', content: systemInstruction },
-          { role: 'user', content: `Content:\n${content}` },
-        ]);
-        return res.json({ text });
-      }
+      const text = await executeWithAiFallback(
+        async () =>
+          await callOpenRouter([
+            { role: 'system', content: systemInstruction },
+            { role: 'user', content: `Content:\n${content}` },
+          ]),
+        async () => {
+          const ai = getGeminiClient();
+          const response = await ai.models.generateContent({
+            model: 'gemini-4-hydrogen',
+            contents: `Content:\n${content}`,
+            config: { systemInstruction },
+          });
+          return response.text || '';
+        }
+      );
 
-      const ai = getGeminiClient();
-      const response = await ai.models.generateContent({
-        model: 'gemini-4-hydrogen',
-        contents: `Content:\n${content}`,
-        config: { systemInstruction },
-      });
-      return res.json({ text: response.text || '' });
+      return res.json({ text });
     } catch (err) {
       const { status, message } = formatAiError(err);
       return res.status(status).json({ error: message });
@@ -672,103 +798,558 @@ export function createApiApp(): express.Express {
         return res.status(400).json({ error: 'Unsupported file type. Please upload an image or PDF.' });
       }
 
+      const langInstruction = resolveLanguageInstruction(req.body?.language);
+      const finalInstruction = langInstruction ? `${instruction} ${langInstruction}` : instruction;
       const finalPrompt = prompt || 'Explain the educational concepts depicted in this material.';
 
-      if (getOpenRouterKey()) {
-        const userParts: OpenRouterContentPart[] = [];
-        if (base64Image && mimeType) {
-          userParts.push(buildOpenRouterAttachmentPart(base64Image, mimeType));
-        }
-        userParts.push({ type: 'text', text: finalPrompt });
-        const text = await callOpenRouter([
-          { role: 'system', content: instruction },
-          { role: 'user', content: userParts },
-        ]);
-        return res.json({ text });
-      }
-
-      const ai = getGeminiClient();
-      const parts: any[] = [];
-      if (base64Image && mimeType) {
-        parts.push({
-          inlineData: {
-            mimeType,
-            data: base64Image,
-          },
-        });
-      }
-      parts.push({ text: finalPrompt });
-
-      const response = await ai.models.generateContent({
-        model: 'gemini-4-hydrogen',
-        contents: { parts },
-        config: {
-          systemInstruction: instruction,
+      const text = await executeWithAiFallback(
+        async () => {
+          const userParts: OpenRouterContentPart[] = [];
+          if (base64Image && mimeType) {
+            userParts.push(buildOpenRouterAttachmentPart(base64Image, mimeType));
+          }
+          userParts.push({ type: 'text', text: finalPrompt });
+          return await callOpenRouter([
+            { role: 'system', content: finalInstruction },
+            { role: 'user', content: userParts },
+          ]);
         },
-      });
+        async () => {
+          const ai = getGeminiClient();
+          const parts: any[] = [];
+          if (base64Image && mimeType) {
+            parts.push({
+              inlineData: {
+                mimeType,
+                data: base64Image,
+              },
+            });
+          }
+          parts.push({ text: finalPrompt });
 
-      return res.json({ text: response.text || '' });
+          const response = await ai.models.generateContent({
+            model: 'gemini-4-hydrogen',
+            contents: { parts },
+            config: {
+              systemInstruction: finalInstruction,
+            },
+          });
+          return response.text || '';
+        }
+      );
+
+      return res.json({ text });
     } catch (err) {
       const { status, message } = formatAiError(err);
       return res.status(status).json({ error: message });
     }
   });
 
-  // AI Paper Pattern Predictor
-  app.post('/api/ai/predict-paper', async (req, res) => {
+  // Sindhi Question (Text or Voice Audio) -> Sindhi Topic Explanation + Spoken Narration Script
+  app.post('/api/ai/sindhi-explain', async (req, res) => {
     try {
-      const content = typeof req.body?.content === 'string' ? req.body.content.trim() : '';
-      const base64Image = typeof req.body?.base64Image === 'string' ? req.body.base64Image : undefined;
-      const mimeType = req.body?.mimeType;
+      const typedQuestion = typeof req.body?.question === 'string' ? req.body.question.trim() : '';
+      const audioBase64 = typeof req.body?.audioBase64 === 'string' ? req.body.audioBase64.trim() : '';
+      const audioMimeType = typeof req.body?.audioMimeType === 'string' ? req.body.audioMimeType.trim() : '';
+      const subject = typeof req.body?.subject === 'string' ? req.body.subject.trim().slice(0, 80) : 'General Science';
+      const grade = typeof req.body?.grade === 'string' ? req.body.grade.trim().slice(0, 40) : 'Class 9–10';
 
-      if (!content && !base64Image) {
-        return res.status(400).json({ error: 'Provide past paper text or upload an image/PDF.' });
+      if (!typedQuestion && !audioBase64) {
+        return res.status(400).json({ error: 'Please type a Sindhi question or record your voice question.' });
       }
-      if (content.length > 20000) {
-        return res.status(400).json({ error: 'Content must be 20,000 characters or fewer.' });
+      if (typedQuestion.length > 4000) {
+        return res.status(400).json({ error: 'Question must be 4,000 characters or fewer.' });
       }
-      if (base64Image && !isAllowedMimeType(mimeType)) {
-        return res.status(400).json({ error: 'Unsupported file type. Please upload an image or PDF.' });
+      if (audioBase64 && !/^audio\/(wav|x-wav|wave|webm|mp3|mpeg|ogg|mp4|m4a)$/i.test(audioMimeType)) {
+        return res.status(400).json({ error: 'Unsupported audio recording format.' });
       }
 
-      const finalPrompt = `Analyze this past paper and predict important high-yield topics and likely questions for the next exam. Format clearly with Markdown headings.\n\n${
-        content || 'Analyze the uploaded past paper.'
-      }`;
+      let resolvedQuestion = typedQuestion;
 
-      if (getOpenRouterKey()) {
-        const userParts: OpenRouterContentPart[] = [];
-        if (base64Image && mimeType) {
-          userParts.push(buildOpenRouterAttachmentPart(base64Image, mimeType));
+      // Step 1: Transcribe recorded Sindhi audio if voice input was provided
+      if (audioBase64) {
+        const cleanAudioBase64 = audioBase64.replace(/^data:audio\/[a-z0-9.+-]+;base64,/i, '');
+        const audioFormat = audioMimeType.split('/')[1]?.replace('x-wav', 'wav').replace('wave', 'wav').replace('mpeg', 'mp3') || 'wav';
+
+        resolvedQuestion = await executeWithAiFallback(
+          async () => {
+            if (audioFormat !== 'wav' && audioFormat !== 'mp3') {
+              throw new Error('OpenRouter audio input requires WAV or MP3 format.');
+            }
+            const text = await callOpenRouter([
+              {
+                role: 'system',
+                content:
+                  'You are a Sindhi speech transcriber for students. Transcribe the spoken question faithfully in standard Sindhi script (سنڌي). Output ONLY the transcribed question text.',
+              },
+              {
+                role: 'user',
+                content: [
+                  {
+                    type: 'input_audio',
+                    input_audio: {
+                      data: cleanAudioBase64,
+                      format: audioFormat as 'wav' | 'mp3',
+                    },
+                  } as any,
+                  {
+                    type: 'text',
+                    text: typedQuestion
+                      ? `Transcribe this Sindhi student voice question accurately. Context hint: ${typedQuestion}`
+                      : 'Transcribe this Sindhi student voice question accurately in standard Sindhi script (سنڌي).',
+                  },
+                ],
+              },
+            ]);
+            return text.trim();
+          },
+          async () => {
+            const ai = getGeminiClient();
+            const audioPart = {
+              inlineData: {
+                mimeType: audioMimeType || 'audio/wav',
+                data: cleanAudioBase64,
+              },
+            };
+            const promptPart = {
+              text: 'Transcribe the student question from this audio accurately into standard Sindhi script (سنڌي). If scientific English words are mixed in, write them cleanly inside the Sindhi question. Return only the transcribed question.',
+            };
+            try {
+              const transcribeRes = await ai.models.generateContent({
+                model: 'gemini-3.5-transcribe',
+                contents: { parts: [audioPart, promptPart] },
+              });
+              const t = (transcribeRes.text || '').trim();
+              if (t) return t;
+            } catch {
+              // Fallback to multimodal Gemini 4 Hydrogen audio understanding
+            }
+            const fallbackRes = await ai.models.generateContent({
+              model: 'gemini-4-hydrogen',
+              contents: { parts: [audioPart, promptPart] },
+            });
+            return (fallbackRes.text || '').trim();
+          }
+        );
+
+        if (!resolvedQuestion) {
+          return res.status(422).json({
+            error: 'Could not clearly hear a question from your recording. Please try speaking closer to the microphone or type your question.',
+          });
         }
-        userParts.push({ type: 'text', text: finalPrompt });
-        const text = await callOpenRouter([
-          { role: 'user', content: userParts },
-        ]);
-        return res.json({ text });
       }
 
-      const ai = getGeminiClient();
-      const parts: any[] = [];
-      if (base64Image && mimeType) {
-        parts.push({
-          inlineData: {
-            mimeType,
-            data: base64Image,
+      // Step 2: Generate complete Sindhi explanation + natural spoken narration script
+      const parseExplanationJson = (rawText: string) => {
+        const cleaned = rawText
+          .trim()
+          .replace(/^```json\s*/i, '')
+          .replace(/^```\s*/i, '')
+          .replace(/\s*```$/i, '')
+          .trim();
+        const tryParse = (candidate: string) => {
+          try {
+            const obj = JSON.parse(candidate);
+            if (obj && typeof obj === 'object') return obj;
+          } catch {}
+          return null;
+        };
+        let parsed = tryParse(cleaned);
+        if (!parsed) {
+          const start = cleaned.indexOf('{');
+          const end = cleaned.lastIndexOf('}');
+          if (start !== -1 && end > start) {
+            parsed = tryParse(cleaned.slice(start, end + 1));
+          }
+        }
+        return {
+          topicTitle:
+            typeof parsed?.topicTitle === 'string' && parsed.topicTitle.trim()
+              ? parsed.topicTitle.trim()
+              : resolvedQuestion.slice(0, 80),
+          detectedQuestion:
+            typeof parsed?.detectedQuestion === 'string' && parsed.detectedQuestion.trim()
+              ? parsed.detectedQuestion.trim()
+              : resolvedQuestion,
+          explanation:
+            typeof parsed?.explanation === 'string' && parsed.explanation.trim()
+              ? parsed.explanation.trim()
+              : rawText.trim(),
+          spokenScript:
+            typeof parsed?.spokenScript === 'string' && parsed.spokenScript.trim()
+              ? parsed.spokenScript.trim()
+              : rawText.replace(/[#*`>$_]+/g, ' ').trim().slice(0, 2200),
+          keyTakeaways: Array.isArray(parsed?.keyTakeaways)
+            ? parsed.keyTakeaways.map((item: unknown) => String(item ?? '').trim()).filter(Boolean).slice(0, 5)
+            : [],
+          suggestedLabSubject:
+            typeof parsed?.suggestedLabSubject === 'string' &&
+            ['physics', 'chemistry', 'biology', 'math', 'computer', 'electrical'].includes(
+              parsed.suggestedLabSubject.trim().toLowerCase()
+            )
+              ? parsed.suggestedLabSubject.trim().toLowerCase()
+              : '',
+        };
+      };
+
+      const systemPrompt = `You are Ustad Learnify, an expert STEM teacher fluent in authentic standard Sindhi (سنڌي script). A ${grade} student asked a question in ${subject}.
+Write strictly in pure standard Sindhi (سنڌي) using proper Sindhi words (آهي، ٿو، ڪري، ۾، ۽، جو، جي) — NEVER mix Urdu words (like میں، یہ، ہے) or any non-Sindhi/Chinese characters. Keep responses focused and crisp. Return ONLY valid JSON matching these fields:
+- "topicTitle": Short topic title in Sindhi script (max 10 words).
+- "detectedQuestion": Clean restatement of the student's question in Sindhi script.
+- "explanation": Clear, thorough explanation of the whole topic in standard Sindhi script (سنڌي) with 2–3 brief Markdown headings, an everyday real-life example, and key formula (around 100–160 words).
+- "spokenScript": A warm, natural 80–130 word spoken lecture in standard Sindhi script (سنڌي) explaining the whole topic aloud for Text-to-Speech. Plain Sindhi sentences only: NO Markdown (#, *, -), NO bullet numbers, and spell formulas in natural Sindhi words.
+- "keyTakeaways": Array of 3 short one-line takeaways in Sindhi script.
+- "suggestedLabSubject": One of "physics", "chemistry", "biology", "math", "computer", "electrical", or "" if none fits.`;
+
+      const userPrompt = `Student Question (${subject}, ${grade}):\n${resolvedQuestion}`;
+
+      const runGeminiSindhi = async () => {
+        const ai = getGeminiClient();
+        const response = await ai.models.generateContent({
+          model: 'gemini-4-hydrogen',
+          contents: userPrompt,
+          config: {
+            systemInstruction: systemPrompt,
+            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                topicTitle: { type: Type.STRING },
+                detectedQuestion: { type: Type.STRING },
+                explanation: { type: Type.STRING },
+                spokenScript: { type: Type.STRING },
+                keyTakeaways: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING },
+                },
+                suggestedLabSubject: { type: Type.STRING },
+              },
+              required: ['topicTitle', 'detectedQuestion', 'explanation', 'spokenScript', 'keyTakeaways'],
+            },
           },
         });
+        return parseExplanationJson(response.text || '{}');
+      };
+
+      const runOpenRouterSindhi = async () => {
+        const text = await callOpenRouter(
+          [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+          ],
+          true,
+          false
+        );
+        return parseExplanationJson(text);
+      };
+
+      let result;
+      if (getGeminiKey()) {
+        try {
+          result = await runGeminiSindhi();
+        } catch (geminiErr) {
+          if (getOpenRouterKey()) {
+            result = await runOpenRouterSindhi();
+          } else {
+            throw geminiErr;
+          }
+        }
+      } else {
+        result = await runOpenRouterSindhi();
       }
-      parts.push({ text: finalPrompt });
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-4-hydrogen',
-        contents: { parts },
-      });
-
-      return res.json({ text: response.text || '' });
+      return res.json(result);
     } catch (err) {
       const { status, message } = formatAiError(err);
       return res.status(status).json({ error: message });
     }
+  });
+
+  // Server-side Neural Voice TTS (Gemini TTS v1alpha/v1beta + OpenRouter gpt-audio-mini fallback)
+  app.post('/api/ai/tts', async (req, res) => {
+    try {
+      const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
+      if (!text || text.length > 5000) {
+        return res.status(400).json({ error: 'Voice text must be between 1 and 5,000 characters.' });
+      }
+      const allowedVoices = new Set(['Kore', 'Puck', 'Charon', 'Fenrir', 'Zephyr']);
+      const requestedVoice = typeof req.body?.voiceName === 'string' ? req.body.voiceName.trim() : 'Kore';
+      const voiceName = allowedVoices.has(requestedVoice) ? requestedVoice : 'Kore';
+      const style =
+        typeof req.body?.style === 'string' && req.body.style.trim()
+          ? req.body.style.trim().slice(0, 200)
+          : 'Warm, clear, patient Sindhi STEM teacher explaining a complete topic aloud to a student.';
+
+      const geminiKey = getGeminiKey();
+      const openRouterKey = getOpenRouterKey();
+      if (!geminiKey && !openRouterKey) {
+        return res.status(503).json({
+          error: 'AI API key is not configured. Add OPENROUTER_API_KEY or GEMINI_API_KEY in Settings > Secrets.',
+        });
+      }
+
+      const errors: string[] = [];
+
+      // 1. Try Gemini TTS configurations
+      if (geminiKey) {
+        const geminiAttempts: Array<() => Promise<{ audioBase64: string; mimeType: string } | null>> = [
+          async () => {
+            const aiAlpha = new GoogleGenAI({
+              apiKey: geminiKey,
+              apiVersion: 'v1alpha',
+              httpOptions: { headers: { 'User-Agent': 'aistudio-build' } },
+            });
+            const r = await aiAlpha.models.generateContent({
+              model: 'gemini-3.8-flash-lite-tts',
+              contents: [
+                {
+                  role: 'user',
+                  parts: [{ text, speechMetadata: { style } } as any],
+                },
+              ],
+              config: {
+                responseModalities: ['AUDIO'],
+                speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } },
+              },
+            });
+            const part = r.candidates?.[0]?.content?.parts?.find((p: any) => p?.inlineData?.data);
+            return part?.inlineData?.data
+              ? { audioBase64: part.inlineData.data, mimeType: part.inlineData.mimeType || 'audio/wav' }
+              : null;
+          },
+          async () => {
+            const aiBeta = getGeminiClient();
+            const r = await aiBeta.models.generateContent({
+              model: 'gemini-3.8-flash-lite-tts',
+              contents: `Speak warmly as a Sindhi STEM teacher:\n\n${text}`,
+              config: {
+                responseModalities: ['AUDIO'],
+                speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } },
+              },
+            });
+            const part = r.candidates?.[0]?.content?.parts?.find((p: any) => p?.inlineData?.data);
+            return part?.inlineData?.data
+              ? { audioBase64: part.inlineData.data, mimeType: part.inlineData.mimeType || 'audio/wav' }
+              : null;
+          },
+          async () => {
+            const aiBeta = getGeminiClient();
+            const r = await aiBeta.models.generateContent({
+              model: 'gemini-2.5-flash-preview-tts',
+              contents: `Speak clearly and warmly:\n\n${text}`,
+              config: {
+                responseModalities: ['AUDIO'],
+                speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } },
+              },
+            });
+            const part = r.candidates?.[0]?.content?.parts?.find((p: any) => p?.inlineData?.data);
+            return part?.inlineData?.data
+              ? { audioBase64: part.inlineData.data, mimeType: part.inlineData.mimeType || 'audio/wav' }
+              : null;
+          },
+        ];
+
+        for (const attempt of geminiAttempts) {
+          try {
+            const result = await attempt();
+            if (result?.audioBase64) {
+              return res.json({
+                audioBase64: result.audioBase64,
+                mimeType: result.mimeType,
+                voiceName,
+              });
+            }
+          } catch (e) {
+            errors.push(e instanceof Error ? e.message : String(e));
+          }
+        }
+      }
+
+      // 2. Fallback to OpenRouter audio output model (openai/gpt-audio-mini)
+      if (openRouterKey) {
+        const openAiVoiceMap: Record<string, string> = {
+          Kore: 'nova',
+          Zephyr: 'shimmer',
+          Puck: 'alloy',
+          Charon: 'onyx',
+          Fenrir: 'echo',
+        };
+        const appUrl =
+          (process.env.APP_URL || '').trim() ||
+          (process.env.VERCEL_PROJECT_PRODUCTION_URL
+            ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+            : '') ||
+          'https://learnify-ten-olive.vercel.app';
+
+        for (const audioModel of ['openai/gpt-audio-mini', 'openai/gpt-audio']) {
+          try {
+            const orRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${openRouterKey}`,
+                'Content-Type': 'application/json',
+                'HTTP-Referer': appUrl,
+                'X-Title': 'Learnify',
+              },
+              body: JSON.stringify({
+                model: audioModel,
+                modalities: ['text', 'audio'],
+                audio: {
+                  voice: openAiVoiceMap[voiceName] || 'nova',
+                  format: 'wav',
+                },
+                messages: [
+                  {
+                    role: 'system',
+                    content:
+                      'You are a warm Sindhi STEM teacher voice narrator. Read the user-provided Sindhi lesson word-for-word naturally and clearly in Sindhi pronunciation with zero extra commentary.',
+                  },
+                  {
+                    role: 'user',
+                    content: text,
+                  },
+                ],
+              }),
+              signal: AbortSignal.timeout(45000),
+            });
+            const payload: any = await orRes.json().catch(() => ({}));
+            const audioData = payload?.choices?.[0]?.message?.audio?.data;
+            if (orRes.ok && typeof audioData === 'string' && audioData.trim()) {
+              return res.json({
+                audioBase64: audioData.trim(),
+                mimeType: 'audio/wav',
+                voiceName,
+              });
+            }
+            const errMsg = payload?.error?.message || `OpenRouter audio status ${orRes.status}`;
+            errors.push(errMsg);
+          } catch (e) {
+            errors.push(e instanceof Error ? e.message : String(e));
+          }
+        }
+      }
+
+      throw new Error(errors[errors.length - 1] || 'Voice synthesis failed across configured providers.');
+    } catch (err) {
+      const { status, message } = formatAiError(err);
+      return res.status(status).json({ error: message });
+    }
+  });
+
+  // LearnLab AI Unified Lab, Misconception, Viva, Smart Exam & Teacher Assistant
+  app.post('/api/ai/lab-assistant', async (req, res) => {
+    try {
+      const action = typeof req.body?.action === 'string' ? req.body.action.trim() : '';
+      if (!VALID_LAB_ASSISTANT_ACTIONS.has(action)) {
+        return res.status(400).json({ error: 'Invalid AI assistant action requested.' });
+      }
+      const subject = typeof req.body?.subject === 'string' ? req.body.subject.trim().slice(0, 80) : 'Science';
+      const topic = typeof req.body?.topic === 'string' ? req.body.topic.trim().slice(0, 500) : '';
+      const context = typeof req.body?.context === 'string' ? req.body.context.trim().slice(0, 12000) : '';
+      const langInstruction = resolveLanguageInstruction(req.body?.language);
+
+      const actionPrompts: Record<string, { system: string; user: string }> = {
+        'experiment-plan': {
+          system:
+            'You are a Virtual Lab Designer. Produce safe, structured practical plans mapped to standard virtual equipment. Never output executable code. Include sections: Objectives, Validated Equipment, Step-by-Step Instructions, Observation Table Template, Key Calculations, Check Questions, and Conclusion.',
+          user: `Subject: ${subject}\nTopic: ${topic || 'General Lab'}\nConstraints/Notes: ${context || 'Standard secondary/college science lab.'}`,
+        },
+        'what-if': {
+          system:
+            'You are an AI What-If Scientific Simulator Tutor. Analyze how changing experimental variables alters quantitative outcomes, graphs, and equilibrium behavior with clear physical laws.',
+          user: `Subject: ${subject}\nVariable Scenario: ${topic}\nMeasurements / Parameters:\n${context}`,
+        },
+        'lab-rescue': {
+          system:
+            'You are AI Lab Rescue. Diagnose mistakes during virtual lab procedures using Socratic hints and conceptual guidance WITHOUT immediately revealing the final numeric answer.',
+          user: `Subject: ${subject}\nCurrent Issue/Attempt: ${topic}\nStudent Steps & Observations:\n${context}`,
+        },
+        'practical-report': {
+          system:
+            'You are a Scientific Practical Report Assistant. Turn real recorded student measurements and steps into a clean, editable formal practical report (Aim, Apparatus, Theory/Formula, Observations, Result & Conclusion, Precautions). Do not invent fake measurements.',
+          user: `Subject: ${subject}\nExperiment: ${topic}\nRecorded Observations & Steps:\n${context}`,
+        },
+        'viva-question': {
+          system:
+            'You are an AI Practical Viva Examiner. Ask ONE sharp conceptual oral/written viva follow-up question tailored to the experiment so the student must explain why, not just memorize.',
+          user: `Subject: ${subject}\nExperiment/Topic: ${topic}\nStudent Progress Context: ${context}`,
+        },
+        'viva-evaluate': {
+          system:
+            'You are an AI Practical Viva Examiner. Evaluate the student answer fairly out of 10 with rubric criteria (Concept Accuracy, Scientific Terminology, Practical Reasoning), point out any gap, and ask one brief follow-up prompt.',
+          user: `Subject: ${subject}\nViva Question & Experiment: ${topic}\nStudent Answer:\n${context}`,
+        },
+        'misconception-diagnose': {
+          system:
+            'You are an AI Science Misconception Detector. Identify the underlying wrong mental model, explain why the chosen answer is scientifically inaccurate, clarify the correct principle, and recommend a specific virtual lab experiment to test it.',
+          user: `Subject: ${subject}\nQuestion / Concept: ${topic}\nStudent Mistake Details:\n${context}`,
+        },
+        'misconception-verify': {
+          system:
+            'You are an AI Science Misconception Verifier. Check whether the student explanation proves they overcame the misconception and give concise Mastery Verification feedback.',
+          user: `Subject: ${subject}\nOriginal Misconception: ${topic}\nStudent New Explanation:\n${context}`,
+        },
+        'local-explorer': {
+          system:
+            'You are an AI Local Science Explorer. Connect textbook concepts to everyday household/local phenomena and outline safe, non-hazardous observational measurements students can record cleanly.',
+          user: `Subject: ${subject}\nConcept: ${topic}\nContext: ${context}`,
+        },
+        'teacher-assistant': {
+          system:
+            'You are an AI STEM Teacher Assistant. Draft structured classroom-ready lesson plans, worksheets, balanced assignments, or formative rubrics cleanly in Markdown.',
+          user: `Subject: ${subject}\nTask Type / Topic: ${topic}\nClass Level & Focus:\n${context}`,
+        },
+        'code-debug': {
+          system:
+            'You are a Socratic Programming Lab Mentor for Python, HTML, CSS, and JavaScript. Explain syntax or logic bugs concisely, highlight the exact faulty line/pattern, and provide a corrected minimal snippet.',
+          user: `Language/Environment: ${subject}\nError/Goal: ${topic}\nStudent Code:\n${context}`,
+        },
+        'smart-exam': {
+          system:
+            'You are an AI Smart Exam Coach. Provide topic-wise past-paper trend summaries, syllabus coverage audits, revision priorities, or answer evaluation rubrics. Explicitly focus on academic mastery and NEVER claim to predict actual confidential exam papers.',
+          user: `Exam Mode: ${subject}\nFocus: ${topic}\nMaterial / Student Response:\n${context}`,
+        },
+      };
+
+      const template = actionPrompts[action];
+      const sysPrompt = langInstruction ? `${template.system} ${langInstruction}` : template.system;
+
+      const text = await executeWithAiFallback(
+        async () =>
+          await callOpenRouter([
+            { role: 'system', content: sysPrompt },
+            { role: 'user', content: template.user },
+          ]),
+        async () => {
+          const ai = getGeminiClient();
+          const response = await ai.models.generateContent({
+            model: 'gemini-4-hydrogen',
+            contents: template.user,
+            config: { systemInstruction: sysPrompt },
+          });
+          return response.text || '';
+        }
+      );
+
+      return res.json({ text });
+    } catch (err) {
+      const { status, message } = formatAiError(err);
+      return res.status(status).json({ error: message });
+    }
+  });
+
+  app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (!err) return next();
+    if (err.type === 'entity.too.large') {
+      return res
+        .status(413)
+        .json({ error: 'Uploaded material or request payload is too large. Please keep files under 4 MB.' });
+    }
+    if (err instanceof SyntaxError && 'body' in err) {
+      return res.status(400).json({ error: 'Invalid JSON request payload.' });
+    }
+    return res.status(500).json({ error: 'Unexpected server error while processing request.' });
   });
 
   return app;

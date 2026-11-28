@@ -1,8 +1,6 @@
-import { initializeApp, getApps, getApp, type FirebaseApp } from 'firebase/app';
-import { getAuth, type Auth } from 'firebase/auth';
+import type { FirebaseApp } from 'firebase/app';
+import type { Auth } from 'firebase/auth';
 import {
-  getFirestore,
-  initializeFirestore,
   collection,
   doc,
   getDoc,
@@ -15,10 +13,8 @@ import {
   where,
   serverTimestamp,
   type Firestore,
-  type FirestoreSettings,
 } from 'firebase/firestore';
-import firebaseConfig from '../../firebase-applet-config.json';
-import { OperationType, handleFirestoreError } from '../lib/firebase';
+import { app, db, auth, OperationType, handleFirestoreError } from '../lib/firebase';
 import type {
   SavedQuiz,
   QuizQuestionItem,
@@ -30,8 +26,9 @@ import type {
   UpdateLabResultInput,
 } from '../types';
 
-const READ_TIMEOUT = 8000;
-const WRITE_TIMEOUT = 8000;
+const READ_TIMEOUT = 20000;
+const WRITE_TIMEOUT = 20000;
+const isBrowser = typeof window !== 'undefined';
 const VALID_ID_REGEX = /^[a-zA-Z0-9_-]{1,128}$/;
 const VALID_LAB_SUBJECTS: readonly LabSubject[] = [
   'chemistry',
@@ -42,40 +39,17 @@ const VALID_LAB_SUBJECTS: readonly LabSubject[] = [
   'electrical',
 ];
 
-/**
- * Initializes the Firebase app (reusing any existing default app instance)
- * and binds Cloud Firestore to the configured named database ID.
- */
 export function initializeLearningFirestore(): {
   app: FirebaseApp;
   db: Firestore;
   auth: Auth;
 } {
-  const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-  let db: Firestore;
-  if (typeof window !== 'undefined') {
-    try {
-      db = initializeFirestore(
-        app,
-        {
-          experimentalForceLongPolling: true,
-          experimentalLongPollingOptions: { timeoutSeconds: 20 },
-          useFetchStreams: false,
-        } as FirestoreSettings,
-        firebaseConfig.firestoreDatabaseId
-      );
-    } catch {
-      db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-    }
-  } else {
-    db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-  }
-  const auth = getAuth(app);
   return { app, db, auth };
 }
 
-export const { app: learningFirebaseApp, db: learningDb, auth: learningAuth } =
-  initializeLearningFirestore();
+export const learningFirebaseApp = app;
+export const learningDb = db;
+export const learningAuth = auth;
 
 export async function verifyLearningFirestoreConnection(): Promise<boolean> {
   try {
@@ -87,6 +61,36 @@ export async function verifyLearningFirestoreConnection(): Promise<boolean> {
     }
     return false;
   }
+}
+
+function getLocalCache<T>(key: string): T[] {
+  if (!isBrowser) return [];
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function setLocalCache<T>(key: string, items: T[]): void {
+  if (!isBrowser) return;
+  try {
+    localStorage.setItem(key, JSON.stringify(items.slice(0, 60)));
+  } catch {
+    // Ignore storage quota errors
+  }
+}
+
+function isOfflineOrTimeoutError(error: unknown): boolean {
+  if (isBrowser && !navigator.onLine) return true;
+  const msg = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  return (
+    msg.includes('offline') ||
+    msg.includes('timed out') ||
+    msg.includes('network') ||
+    msg.includes('unavailable')
+  );
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
@@ -227,13 +231,20 @@ export const learningDataService = {
   async getSavedQuizzes(userId?: string): Promise<SavedQuiz[]> {
     const targetUid = userId ? assertValidId(userId, 'user') : requireSignedInUid();
     const path = 'savedQuizzes';
+    const cacheKey = `local_saved_quizzes_${targetUid}`;
 
     try {
       const q = query(collection(learningDb, 'savedQuizzes'), where('userId', '==', targetUid));
       const snap = await withTimeout(getDocs(q), READ_TIMEOUT);
-      const items = snap.docs.map((d) => ({ id: d.id, ...d.data() } as SavedQuiz));
-      return items.sort((a, b) => getTimestampSeconds(b.createdAt) - getTimestampSeconds(a.createdAt));
+      const items = snap.docs
+        .map((d) => ({ id: d.id, ...d.data() } as SavedQuiz))
+        .sort((a, b) => getTimestampSeconds(b.createdAt) - getTimestampSeconds(a.createdAt));
+      setLocalCache(cacheKey, items);
+      return items;
     } catch (error) {
+      if (isOfflineOrTimeoutError(error)) {
+        return getLocalCache<SavedQuiz>(cacheKey);
+      }
       handleFirestoreError(error, OperationType.LIST, path);
     }
   },
@@ -282,7 +293,7 @@ export const learningDataService = {
       patch.questions = sanitizeQuestions(updates.questions);
     }
     if (typeof updates.score === 'number' && Number.isFinite(updates.score)) {
-      patch.score = Math.min(50, Math.max(0, Math.round(updates.score)));
+      patch.score = Math.min(100, Math.max(0, Math.round(updates.score)));
     }
 
     try {
@@ -353,16 +364,21 @@ export const learningDataService = {
   async getLabResults(userId?: string, subject?: LabSubject): Promise<LabResult[]> {
     const targetUid = userId ? assertValidId(userId, 'user') : requireSignedInUid();
     const path = 'labResults';
+    const cacheKey = `local_lab_results_${targetUid}`;
 
     try {
       const q = query(collection(learningDb, 'labResults'), where('userId', '==', targetUid));
       const snap = await withTimeout(getDocs(q), READ_TIMEOUT);
-      let items = snap.docs.map((d) => ({ id: d.id, ...d.data() } as LabResult));
-      if (subject) {
-        items = items.filter((item) => item.subject === subject);
-      }
-      return items.sort((a, b) => getTimestampSeconds(b.createdAt) - getTimestampSeconds(a.createdAt));
+      const allItems = snap.docs
+        .map((d) => ({ id: d.id, ...d.data() } as LabResult))
+        .sort((a, b) => getTimestampSeconds(b.createdAt) - getTimestampSeconds(a.createdAt));
+      setLocalCache(cacheKey, allItems);
+      return subject ? allItems.filter((item) => item.subject === subject) : allItems;
     } catch (error) {
+      if (isOfflineOrTimeoutError(error)) {
+        const cached = getLocalCache<LabResult>(cacheKey);
+        return subject ? cached.filter((item) => item.subject === subject) : cached;
+      }
       handleFirestoreError(error, OperationType.LIST, path);
     }
   },

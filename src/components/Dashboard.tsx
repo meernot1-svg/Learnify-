@@ -30,6 +30,7 @@ import { Material, Course, Progress, Subject, UserProfile } from '../types';
 import { cn } from '../lib/utils';
 import MentorVerification from './MentorVerification';
 import StudentDashboard from './StudentDashboard';
+import { MentorAIAssistant } from './MentorAIAssistant';
 import { format } from 'date-fns';
 
 function getSafeHttpUrl(rawUrl?: string): string | null {
@@ -317,6 +318,8 @@ function MentorDashboard() {
         <StatCard title="My Resources" value={materials.length.toString()} icon={<Clock size={20} />} />
         <StatCard title="Efficiency" value="98%" icon={<TrendingUp size={20} />} />
       </div>
+
+      <MentorAIAssistant students={students} materials={materials} courses={courses} />
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8 lg:gap-12">
         <section className="space-y-10">

@@ -4,8 +4,8 @@ import { motion, AnimatePresence } from 'motion/react';
 import { 
   LayoutDashboard, 
   MessageSquare, 
-  FileCheck, 
-  Image as ImageIcon, 
+  AudioLines, 
+  Image as ImageIcon,  
   Binary, 
   Atom, 
   Dna, 
@@ -20,10 +20,12 @@ import {
   Zap,
   LogOut,
   Calculator,
-  Cpu
+  Cpu,
+  BrainCircuit
 } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { useTheme } from '../hooks/useTheme';
+import { useLanguage, LANGUAGE_OPTIONS, type AppLanguage } from '../hooks/useLanguage';
 import { auth } from '../lib/firebase';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -35,6 +37,7 @@ function cn(...inputs: ClassValue[]) {
 export default function MobileNavigation() {
   const { profile } = useAuth();
   const { theme, setTheme } = useTheme();
+  const { language, setLanguage } = useLanguage();
   const navigate = useNavigate();
   const location = useLocation();
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
@@ -53,7 +56,8 @@ export default function MobileNavigation() {
   ];
 
   const secondaryItems = [
-    { to: '/predictor', icon: FileCheck, label: 'Paper Predictor' },
+    { to: '/learn-hub', icon: BrainCircuit, label: 'LearnLab Hub' },
+    { to: '/sindhi-voice-explainer', icon: AudioLines, label: 'Sindhi Voice' },
   ];
 
   const subjectItems = [
@@ -178,7 +182,7 @@ export default function MobileNavigation() {
                   </div>
                 )}
 
-                 {/* Secondary utilities (Predictor) */}
+                 {/* Secondary utilities */}
                 <div className="space-y-3">
                   <p className="text-[10px] font-black text-muted-foreground uppercase tracking-[0.2em] px-2 opacity-50">Additional tools</p>
 
@@ -244,6 +248,27 @@ export default function MobileNavigation() {
                       >
                         {opt.icon}
                         <span>{opt.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Language Selector Inside Drawer */}
+                <div className="space-y-3 pt-4 border-t border-border">
+                  <p className="text-[10px] font-black text-muted-foreground uppercase tracking-[0.2em] px-2 opacity-50">Study Language</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {LANGUAGE_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.code}
+                        onClick={() => setLanguage(opt.code as AppLanguage)}
+                        className={cn(
+                          "py-2 px-3 text-xs font-bold rounded-xl border transition-all",
+                          language === opt.code
+                            ? "bg-primary text-primary-foreground border-primary shadow-sm"
+                            : "bg-muted text-muted-foreground border-border"
+                        )}
+                      >
+                        {opt.nativeLabel}
                       </button>
                     ))}
                   </div>

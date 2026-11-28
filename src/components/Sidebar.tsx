@@ -3,7 +3,7 @@ import { NavLink } from 'react-router-dom';
 import { 
   LayoutDashboard, 
   MessageSquare, 
-  FileCheck, 
+  AudioLines, 
   Image as ImageIcon, 
   Binary, 
   Atom, 
@@ -12,7 +12,8 @@ import {
   FileQuestion,
   GraduationCap,
   Calculator,
-  Cpu
+  Cpu,
+  BrainCircuit
 } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { clsx, type ClassValue } from 'clsx';
@@ -27,10 +28,11 @@ export default function Sidebar() {
 
   const navItems = [
     { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
+    { to: '/learn-hub', icon: BrainCircuit, label: 'LearnLab Hub' },
     { to: '/ai-chat', icon: MessageSquare, label: 'AI Chatbot' },
     { to: '/mcqs', icon: FileQuestion, label: 'MCQs Provider' },
     { to: '/explainer', icon: ImageIcon, label: 'AI Explainer' },
-    { to: '/predictor', icon: FileCheck, label: 'Paper Predictor' },
+    { to: '/sindhi-voice-explainer', icon: AudioLines, label: 'Sindhi Voice' },
   ];
 
   const subjectItems = [

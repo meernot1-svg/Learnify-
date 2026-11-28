@@ -26,6 +26,7 @@ import {
   Puzzle,
   Terminal,
   Microscope,
+  Sliders,
 } from 'lucide-react';
 import { dbService } from '../services/db';
 import { learningDataService } from '../services/learningData';
@@ -51,9 +52,11 @@ import MechanicsMotionLab from './labs/physics/MechanicsMotionLab';
 import WavesAcousticsLab from './labs/physics/WavesAcousticsLab';
 import EmFieldsLab from './labs/physics/EmFieldsLab';
 import ColorMixingLab from './labs/physics/ColorMixingLab';
+import WhatIfPhysicsLab from './labs/physics/WhatIfPhysicsLab';
 import NetworkSimulatorLab from './labs/computer/NetworkSimulatorLab';
 import MathLabSuite from './labs/math/MathLabSuite';
 import ElectricalLabSuite from './labs/electrical/ElectricalLabSuite';
+import { AILabCompanion } from './labs/AILabCompanion';
 
 type BioSubLab = 'body' | 'cell' | 'build-cell' | 'wetlab';
 type ChemSubLab = 'molecules' | 'reactions' | 'ph' | 'beaker';
@@ -65,6 +68,7 @@ type PhysSubLab =
   | 'waves'
   | 'fields'
   | 'colors'
+  | 'what-if'
   | 'sandbox';
 type CsSubLab = 'ide' | 'network';
 
@@ -98,7 +102,7 @@ export default function SubjectView() {
         setActiveTab('tool');
       } else if (
         id === 'physics' &&
-        ['solar', 'optics', 'atom', 'mechanics', 'waves', 'fields', 'colors', 'sandbox'].includes(requestedLab)
+        ['solar', 'optics', 'atom', 'mechanics', 'waves', 'fields', 'colors', 'what-if', 'sandbox'].includes(requestedLab)
       ) {
         setPhysSubLab(requestedLab as PhysSubLab);
         setActiveTab('tool');
@@ -522,6 +526,7 @@ export default function SubjectView() {
                     { id: 'waves', label: 'Waves & Sound', icon: Waves },
                     { id: 'fields', label: 'EM Fields', icon: Magnet },
                     { id: 'colors', label: 'Color & Light', icon: Palette },
+                    { id: 'what-if', label: 'What-If Force & Motion', icon: Sliders },
                     { id: 'sandbox', label: 'Classic Sandbox', icon: Beaker },
                   ]}
                   activeId={physSubLab}
@@ -535,6 +540,7 @@ export default function SubjectView() {
                 {physSubLab === 'waves' && <WavesAcousticsLab />}
                 {physSubLab === 'fields' && <EmFieldsLab />}
                 {physSubLab === 'colors' && <ColorMixingLab />}
+                {physSubLab === 'what-if' && <WhatIfPhysicsLab />}
                 {physSubLab === 'sandbox' && <VirtualLab initialSubject="physics" hideSwitcher />}
               </div>
             )}
@@ -561,6 +567,36 @@ export default function SubjectView() {
 
             {/* ELECTRICAL ENGINEERING LAB */}
             {id === 'electrical' && <ElectricalLabSuite />}
+
+            {/* AI EXPERIMENT GENERATOR, WHAT-IF, RESCUE, PRACTICAL REPORT, VIVA & LOCAL EXPLORER */}
+            <AILabCompanion
+              subjectId={id || 'physics'}
+              activeSubLab={
+                id === 'biology'
+                  ? bioSubLab
+                  : id === 'chemistry'
+                    ? chemSubLab
+                    : id === 'physics'
+                      ? physSubLab
+                      : id === 'computer'
+                        ? csSubLab
+                        : id || 'physics'
+              }
+              onSelectSubLab={(next) => {
+                if (id === 'biology' && ['body', 'cell', 'build-cell', 'wetlab'].includes(next)) {
+                  setBioSubLab(next as BioSubLab);
+                } else if (id === 'chemistry' && ['molecules', 'reactions', 'ph', 'beaker'].includes(next)) {
+                  setChemSubLab(next as ChemSubLab);
+                } else if (
+                  id === 'physics' &&
+                  ['solar', 'optics', 'atom', 'mechanics', 'waves', 'fields', 'colors', 'what-if', 'sandbox'].includes(next)
+                ) {
+                  setPhysSubLab(next as PhysSubLab);
+                } else if (id === 'computer' && ['ide', 'network'].includes(next)) {
+                  setCsSubLab(next as CsSubLab);
+                }
+              }}
+            />
           </motion.div>
         )}
       </AnimatePresence>

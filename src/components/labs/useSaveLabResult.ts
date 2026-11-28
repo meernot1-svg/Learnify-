@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import { useAuth } from '../../hooks/useAuth';
 import { learningDataService } from '../../services/learningData';
+import { enqueueOfflineLabResult } from '../../lib/offlineSync';
 import { downloadSingleLabReportPdf, type LabReportEntry } from '../../lib/pdfLabReport';
 import type { LabSubject } from '../../types';
 
@@ -42,6 +43,23 @@ export function useSaveLabResult(subject: LabSubject) {
   };
 
   const saveResult = async (params: SaveLabParams) => {
+    const combinedNotes = formatCombinedNotes(params.notes, params.stepsTaken);
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      enqueueOfflineLabResult({
+        experimentTitle: params.experimentTitle,
+        subject,
+        outcome: params.outcome,
+        formula: params.formula || '',
+        measurements: params.measurements || '',
+        notes: combinedNotes,
+      });
+      setFeedback({
+        type: 'success',
+        text: 'Saved offline locally — it will sync to your Dashboard tracker automatically when you reconnect.',
+      });
+      return true;
+    }
+
     if (!user?.uid) {
       setFeedback({ type: 'error', text: 'Sign in to save lab results to your student profile.' });
       return false;
@@ -55,7 +73,7 @@ export function useSaveLabResult(subject: LabSubject) {
         outcome: params.outcome,
         formula: params.formula || '',
         measurements: params.measurements || '',
-        notes: formatCombinedNotes(params.notes, params.stepsTaken),
+        notes: combinedNotes,
       });
       setFeedback({
         type: 'success',
@@ -64,6 +82,21 @@ export function useSaveLabResult(subject: LabSubject) {
       return true;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Unable to save lab result.';
+      if (!navigator.onLine || msg.toLowerCase().includes('network') || msg.toLowerCase().includes('timeout')) {
+        enqueueOfflineLabResult({
+          experimentTitle: params.experimentTitle,
+          subject,
+          outcome: params.outcome,
+          formula: params.formula || '',
+          measurements: params.measurements || '',
+          notes: combinedNotes,
+        });
+        setFeedback({
+          type: 'success',
+          text: 'Connection unavailable — experiment queued offline for automatic sync.',
+        });
+        return true;
+      }
       setFeedback({ type: 'error', text: msg });
       return false;
     } finally {

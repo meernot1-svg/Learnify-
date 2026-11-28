@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Atom,
+  AudioLines,
   Award,
   Beaker,
   Bell,
@@ -15,7 +16,6 @@ import {
   Dna,
   Download,
   ExternalLink,
-  FileCheck,
   FileDown,
   FileQuestion,
   FileText,
@@ -71,6 +71,7 @@ import {
 } from '../types';
 import { cn } from '../lib/utils';
 import { downloadPortfolioLabReportPdf, downloadSingleLabReportPdf } from '../lib/pdfLabReport';
+import AILearningTwin from './AILearningTwin';
 import { MaterialViewer } from './Dashboard';
 import StudyReminders from './StudyReminders';
 import WeeklyStudyActivity, { WeeklyStudyActivityEntry } from './WeeklyStudyActivity';
@@ -885,6 +886,15 @@ export default function StudentDashboard() {
         />
       </section>
 
+      {/* AI Learning Twin Radar Visualization & Lab Module Suggestions */}
+      <AILearningTwin
+        userId={user?.uid}
+        savedQuizzes={savedQuizzes}
+        labResults={labResults}
+        progress={progress}
+        loading={learningLoading}
+      />
+
       {/* Subjects & Quick Study Tools */}
       <section aria-label="Subjects and study tools" className="space-y-4">
         <div className="flex items-center justify-between gap-4">
@@ -968,10 +978,10 @@ export default function StudentDashboard() {
             onClick={() => navigate('/explainer')}
           />
           <StudyToolButton
-            icon={<FileCheck size={16} />}
-            title="Paper Predictor"
-            subtitle="Exam topic forecasting"
-            onClick={() => navigate('/predictor')}
+            icon={<AudioLines size={16} />}
+            title="Sindhi Voice Explainer"
+            subtitle="Ask in Sindhi, learn by voice"
+            onClick={() => navigate('/sindhi-voice-explainer')}
           />
         </div>
       </section>

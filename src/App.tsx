@@ -7,6 +7,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'r
 import { AnimatePresence, motion } from 'motion/react';
 import { AuthProvider, useAuth } from './hooks/useAuth';
 import { ThemeProvider } from './hooks/useTheme';
+import { LanguageProvider } from './hooks/useLanguage';
 import LandingPage from './components/LandingPage';
 import Dashboard from './components/Dashboard';
 import Login from './components/Login';
@@ -17,9 +18,10 @@ import SubjectView from './components/SubjectView';
 import AIChat from './components/AIChat';
 import MCQProvider from './components/MCQProvider';
 import Explainer from './components/Explainer';
-import PaperPredictor from './components/PaperPredictor';
+import SindhiVoiceExplainer from './components/SindhiVoiceExplainer';
 import MobileNavigation from './components/MobileNavigation';
 import AdminPanel from './components/AdminPanel';
+import LearnLabHub from './components/LearnLabHub';
 
 // SEO and Public Pages
 import FreeQuizMaker from './components/seo-pages/FreeQuizMaker';
@@ -87,6 +89,12 @@ function AppRoutes() {
           </ProtectedRoute>
         } />
 
+        <Route path="/learn-hub" element={
+          <ProtectedRoute>
+            <AppLayout><PageWrapper><LearnLabHub /></PageWrapper></AppLayout>
+          </ProtectedRoute>
+        } />
+
         <Route path="/subject/:id" element={
           <ProtectedRoute>
             <AppLayout><PageWrapper><SubjectView /></PageWrapper></AppLayout>
@@ -111,11 +119,13 @@ function AppRoutes() {
           </ProtectedRoute>
         } />
 
-        <Route path="/predictor" element={
+        <Route path="/sindhi-voice-explainer" element={
           <ProtectedRoute>
-            <AppLayout><PageWrapper><PaperPredictor /></PageWrapper></AppLayout>
+            <AppLayout><PageWrapper><SindhiVoiceExplainer /></PageWrapper></AppLayout>
           </ProtectedRoute>
         } />
+
+        <Route path="/predictor" element={<Navigate to="/sindhi-voice-explainer" replace />} />
 
         {/* Public SEO Feature Pages */}
         <Route path="/free-quiz-maker" element={<PageWrapper><FreeQuizMaker /></PageWrapper>} />
@@ -163,11 +173,13 @@ export default function App() {
   return (
     <ErrorBoundary>
       <ThemeProvider>
-        <AuthProvider>
-          <Router>
-            <AppRoutes />
-          </Router>
-        </AuthProvider>
+        <LanguageProvider>
+          <AuthProvider>
+            <Router>
+              <AppRoutes />
+            </Router>
+          </AuthProvider>
+        </LanguageProvider>
       </ThemeProvider>
     </ErrorBoundary>
   );

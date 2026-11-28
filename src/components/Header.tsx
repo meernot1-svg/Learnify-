@@ -3,13 +3,16 @@ import { useNavigate, Link } from 'react-router-dom';
 import { GraduationCap, Sun, Moon, Zap, LogIn, UserPlus, LogOut } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { useTheme } from '../hooks/useTheme';
+import { useLanguage, LANGUAGE_OPTIONS, type AppLanguage } from '../hooks/useLanguage';
 import { auth } from '../lib/firebase';
 import { Logo } from './Logo';
+import { PWAInstallButton } from './PWAInstallButton';
 
 export default function Header() {
   const navigate = useNavigate();
   const { user, profile } = useAuth();
   const { theme, setTheme } = useTheme();
+  const { language, setLanguage } = useLanguage();
 
   const handleLogout = async () => {
     await auth.signOut();
@@ -32,7 +35,23 @@ export default function Header() {
            </Link>
         </div>
 
-        <div className="flex items-center gap-4 md:gap-8">
+        <div className="flex items-center gap-2 sm:gap-4 md:gap-6">
+          <PWAInstallButton />
+
+          <select
+            aria-label="Language"
+            value={language}
+            onChange={(e) => setLanguage(e.target.value as AppLanguage)}
+            className="hidden sm:block bg-muted/60 border border-border rounded-xl px-2.5 py-1.5 text-[11px] font-bold text-foreground cursor-pointer"
+            title="Select Study & AI Language"
+          >
+            {LANGUAGE_OPTIONS.map((opt) => (
+              <option key={opt.code} value={opt.code}>
+                {opt.nativeLabel}
+              </option>
+            ))}
+          </select>
+
           <div className="flex items-center bg-muted/50 rounded-full p-1 border border-border">
             {themeOptions.map((opt) => (
               <button

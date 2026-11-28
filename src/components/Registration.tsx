@@ -61,8 +61,14 @@ export default function Registration() {
       await refreshProfile();
       navigate('/dashboard');
     } catch (err: any) {
-      console.error("Failed to register:", err);
-      setError(err?.message || "Registration failed. Please check your connection and try again.");
+      let friendly = err?.message || "Registration failed. Please check your connection and try again.";
+      try {
+        const parsed = JSON.parse(friendly);
+        if (parsed?.error) friendly = parsed.error;
+      } catch {
+        // Not JSON
+      }
+      setError(`Registration failed: ${friendly}`);
     } finally {
       setLoading(false);
     }

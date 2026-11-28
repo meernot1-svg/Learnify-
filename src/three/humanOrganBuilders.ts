@@ -3,6 +3,8 @@ import {
   PartRegistry,
   SpecimenBuildResult,
   addPedestal,
+  buildRealisticHumanSkeletonParts,
+  createBoneTexture,
   createBrainBumpTexture,
   createTissueMicroTexture,
 } from './anatomyBuilder';
@@ -526,103 +528,28 @@ function buildHumanSkeleton(maxAniso: number): SpecimenBuildResult {
   const root = new THREE.Group();
   const reg = new PartRegistry();
   addPedestal(root, reg, maxAniso, 1.5);
-  const boneMat = new THREE.MeshStandardMaterial({ color: 0xebe4d4, roughness: 0.5, metalness: 0.06 });
+  const boneTex = createBoneTexture(maxAniso);
+  reg.textures.push(boneTex);
 
-  // 1. Cranium & Jaw
-  const skullGroup = new THREE.Group();
-  skullGroup.position.set(0, 2.98, 0.04);
-  const cranium = new THREE.Mesh(new THREE.SphereGeometry(0.22, 22, 18), boneMat);
-  cranium.scale.set(0.88, 1.08, 1.05);
-  const jaw = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.13, 0.2), boneMat);
-  jaw.position.set(0, -0.18, 0.08);
-  [-1, 1].forEach((side) => {
-    const orbit = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.055, 0.055, 0.05, 14),
-      new THREE.MeshStandardMaterial({ color: 0x1e293b })
-    );
-    orbit.rotation.x = Math.PI / 2;
-    orbit.position.set(side * 0.08, -0.02, 0.19);
-    skullGroup.add(orbit);
-  });
-  skullGroup.add(cranium, jaw);
-  root.add(skullGroup);
-  reg.registerPart('cranium_jaw', skullGroup, new THREE.Vector3(0, 0.65, 0));
+  const rig = buildRealisticHumanSkeletonParts(boneTex, { skullTranslucent: false });
 
-  // 2. Vertebral Column
-  const spineGroup = new THREE.Group();
-  for (let i = 0; i < 16; i++) {
-    const v = new THREE.Mesh(new THREE.CylinderGeometry(0.044, 0.048, 0.072, 12), boneMat);
-    v.position.set(0, 1.38 + i * 0.095, -0.14 + Math.sin(i * 0.35) * 0.03);
-    spineGroup.add(v);
-  }
-  root.add(spineGroup);
-  reg.registerPart('vertebral_column', spineGroup, new THREE.Vector3(0, 0, -0.78));
+  root.add(rig.skullGroup);
+  reg.registerPart('cranium_jaw', rig.skullGroup, new THREE.Vector3(0, 0.65, 0));
 
-  // 3. Ribcage & Sternum
-  const ribGroup = new THREE.Group();
-  const sternum = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.52, 0.028), boneMat);
-  sternum.position.set(0, 2.24, 0.25);
-  ribGroup.add(sternum);
-  for (let r = 0; r < 7; r++) {
-    const y = 2.48 - r * 0.08;
-    const w = 0.28 + Math.sin((r / 6) * Math.PI) * 0.09;
-    [-1, 1].forEach((side) => {
-      const curve = new THREE.CatmullRomCurve3([
-        new THREE.Vector3(side * 0.03, y, -0.14),
-        new THREE.Vector3(side * w, y - 0.02, 0.04),
-        new THREE.Vector3(side * (w * 0.56), y - 0.05, 0.23),
-        new THREE.Vector3(side * 0.03, y - 0.04, 0.25),
-      ]);
-      ribGroup.add(new THREE.Mesh(new THREE.TubeGeometry(curve, 16, 0.015, 8, false), boneMat));
-    });
-  }
-  root.add(ribGroup);
-  reg.registerPart('thoracic_cage', ribGroup, new THREE.Vector3(0, 0.15, 0.72));
+  root.add(rig.spineGroup);
+  reg.registerPart('vertebral_column', rig.spineGroup, new THREE.Vector3(0, 0, -0.78));
 
-  // 4. Upper Limbs
-  const upperGroup = new THREE.Group();
-  [-1, 1].forEach((side) => {
-    const clav = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.34, 10), boneMat);
-    clav.rotation.z = side * (Math.PI / 2 - 0.15);
-    clav.position.set(side * 0.22, 2.55, 0.1);
-    const hum = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.024, 0.58, 12), boneMat);
-    hum.position.set(side * 0.44, 2.22, 0);
-    hum.rotation.z = side * 0.12;
-    const rad = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.015, 0.5, 10), boneMat);
-    rad.position.set(side * 0.52, 1.72, 0.04);
-    const uln = rad.clone();
-    uln.position.x = side * 0.48;
-    const hand = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.16, 0.04), boneMat);
-    hand.position.set(side * 0.52, 1.38, 0.05);
-    upperGroup.add(clav, hum, rad, uln, hand);
-  });
-  root.add(upperGroup);
-  reg.registerPart('upper_limbs', upperGroup, new THREE.Vector3(0.7, 0.1, 0));
+  root.add(rig.thoraxGroup);
+  reg.registerPart('thoracic_cage', rig.thoraxGroup, new THREE.Vector3(0, 0.15, 0.72));
 
-  // 5. Pelvis
-  const pelvGroup = new THREE.Group();
-  pelvGroup.position.set(0, 1.38, 0);
-  const pRing = new THREE.Mesh(new THREE.TorusGeometry(0.2, 0.044, 10, 26), boneMat);
-  pRing.rotation.x = Math.PI / 2.2;
-  pRing.scale.set(1.25, 0.75, 1);
-  pelvGroup.add(pRing);
-  root.add(pelvGroup);
-  reg.registerPart('pelvis_girdle', pelvGroup, new THREE.Vector3(-0.7, 0, 0));
+  root.add(rig.upperLimbsGroup);
+  reg.registerPart('upper_limbs', rig.upperLimbsGroup, new THREE.Vector3(0.7, 0.1, 0));
 
-  // 6. Lower Limbs
-  const lowerGroup = new THREE.Group();
-  [-1, 1].forEach((side) => {
-    const femur = new THREE.Mesh(new THREE.CylinderGeometry(0.036, 0.03, 0.68, 12), boneMat);
-    femur.position.set(side * 0.18, 0.98, 0);
-    femur.rotation.z = side * -0.06;
-    const tibia = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.022, 0.62, 12), boneMat);
-    tibia.position.set(side * 0.15, 0.34, 0.01);
-    const foot = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.06, 0.24), boneMat);
-    foot.position.set(side * 0.15, 0.04, 0.08);
-    lowerGroup.add(femur, tibia, foot);
-  });
-  root.add(lowerGroup);
-  reg.registerPart('lower_limbs', lowerGroup, new THREE.Vector3(0, -0.45, 0.4));
+  root.add(rig.pelvisGroup);
+  reg.registerPart('pelvis_girdle', rig.pelvisGroup, new THREE.Vector3(-0.7, 0, 0));
+
+  root.add(rig.lowerLimbsGroup);
+  reg.registerPart('lower_limbs', rig.lowerLimbsGroup, new THREE.Vector3(0, -0.45, 0.4));
 
   return {
     root,
@@ -631,7 +558,8 @@ function buildHumanSkeleton(maxAniso: number): SpecimenBuildResult {
     shellMeshes: reg.shellMeshes,
     textures: reg.textures,
     updateAnimation: (elapsed: number) => {
-      ribGroup.scale.setScalar(1 + Math.sin(elapsed * 1.5) * 0.016);
+      const tidal = 0.5 + 0.5 * Math.sin(elapsed * 1.5);
+      rig.ribExpandGroup.scale.set(1 + tidal * 0.022, 1, 1 + tidal * 0.032);
     },
   };
 }

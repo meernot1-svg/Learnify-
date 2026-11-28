@@ -115,3 +115,11 @@
     background: var(--primary);
   }
 }
+
+html.low-bandwidth *,
+html.low-bandwidth *::before,
+html.low-bandwidth *::after {
+  animation-duration: 0.01ms !important;
+  transition-duration: 0.01ms !important;
+  backdrop-filter: none !important;
+}

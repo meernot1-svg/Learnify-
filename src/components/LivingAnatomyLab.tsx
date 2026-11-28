@@ -387,6 +387,10 @@ export default function LivingAnatomyLab({
     rimLight.position.set(-5.0, 4.5, -5.0);
     scene.add(rimLight);
 
+    const fillLight = new THREE.DirectionalLight(0xfffaf0, 0.72);
+    fillLight.position.set(-3.8, 2.2, 5.2);
+    scene.add(fillLight);
+
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = !isSoftwareGl;
     controls.dampingFactor = 0.065;

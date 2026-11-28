@@ -14,8 +14,8 @@ import {
 import { db, auth, OperationType, handleFirestoreError } from '../lib/firebase';
 import { UserProfile, Material, Course, Progress, Subject, StudyReminder } from '../types';
 
-const READ_TIMEOUT = 8000;
-const WRITE_TIMEOUT = 8000;
+const READ_TIMEOUT = 20000;
+const WRITE_TIMEOUT = 20000;
 const isBrowser = typeof window !== 'undefined';
 
 const ADMIN_EMAILS = ['meernot1@gmail.com', 'safiullahbhangar1@gmail.com'];
@@ -208,8 +208,29 @@ export const dbService = {
     };
 
     try {
-      await withTimeout(setDoc(doc(db, 'users', profile.uid), publicDoc), WRITE_TIMEOUT);
-      await withTimeout(setDoc(doc(db, 'users', profile.uid, 'private', 'info'), privateDoc), WRITE_TIMEOUT);
+      const publicRef = doc(db, 'users', profile.uid);
+      const privateRef = doc(db, 'users', profile.uid, 'private', 'info');
+      const existingSnap = await withTimeout(getDoc(publicRef), READ_TIMEOUT);
+
+      if (existingSnap.exists()) {
+        await withTimeout(setDoc(privateRef, privateDoc, { merge: true }), WRITE_TIMEOUT);
+        const existingData = existingSnap.data() as UserProfile;
+        const mergedProfile: UserProfile = {
+          ...existingData,
+          email: privateDoc.email || existingData.email || '',
+          fatherName: privateDoc.fatherName || existingData.fatherName || '',
+          phone: privateDoc.phone || existingData.phone || '',
+          address: privateDoc.address || existingData.address || '',
+        };
+        const local = getLocalList<UserProfile>('local_users');
+        setLocalList('local_users', [...local.filter((u) => u.uid !== profile.uid), mergedProfile]);
+        return;
+      }
+
+      await withTimeout(
+        Promise.all([setDoc(publicRef, publicDoc), setDoc(privateRef, privateDoc)]),
+        WRITE_TIMEOUT
+      );
 
       const cachedProfile: UserProfile = {
         ...profile,

@@ -4,7 +4,7 @@ import { getFirestore, initializeFirestore, doc, getDocFromServer, type Firestor
 import { getStorage } from 'firebase/storage';
 import firebaseConfig from '../../firebase-applet-config.json';
 
-const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+export const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 
 function initFirestore() {
   if (typeof window !== 'undefined') {
@@ -12,9 +12,7 @@ function initFirestore() {
       return initializeFirestore(
         app,
         {
-          experimentalForceLongPolling: true,
-          experimentalLongPollingOptions: { timeoutSeconds: 20 },
-          useFetchStreams: false,
+          experimentalAutoDetectLongPolling: true,
         } as FirestoreSettings,
         firebaseConfig.firestoreDatabaseId
       );

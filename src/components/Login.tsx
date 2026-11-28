@@ -35,19 +35,22 @@ export default function Login() {
         navigate('/dashboard');
       }
     } catch (err: any) {
-      console.error("Login failed:", err);
-      if (err.code === 'auth/network-request-failed') {
+      if (err?.code === 'auth/popup-closed-by-user' || err?.code === 'auth/cancelled-popup-request') {
+        setError("AUTH CANCELLED: Identity verification window was closed before completing sign-in.");
+      } else if (err?.code === 'auth/network-request-failed') {
+        console.error("Login network failed:", err);
         setError("UPLINK INTERRUPTED: Network request failed.");
-      } else if (err.code === 'auth/popup-closed-by-user') {
-        setError("AUTH CANCELLED: Identity verification was interrupted.");
-      } else if (err.code === 'auth/popup-blocked') {
+      } else if (err?.code === 'auth/popup-blocked') {
         setError("POPUP BLOCKED: Please allow popups for this site in your browser settings and try again.");
-      } else if (err.code === 'auth/unauthorized-domain') {
+      } else if (err?.code === 'auth/unauthorized-domain') {
+        console.error("Login unauthorized domain:", err);
         setError(`UNAUTHORIZED DOMAIN: Please add '${window.location.hostname}' to your Authorized Domains in the Firebase Console (Authentication -> Settings -> Authorized Domains).`);
-      } else if (err.code === 'auth/operation-not-allowed') {
+      } else if (err?.code === 'auth/operation-not-allowed') {
+        console.error("Login provider disabled:", err);
         setError("PROVIDER DISABLED: Google Sign-In is not enabled in your Firebase project.");
       } else {
-        setError(`ACCESS DENIED: ${err.message || "Authentication protocol failed."}`);
+        console.error("Login failed:", err);
+        setError(`ACCESS DENIED: ${err?.message || "Authentication protocol failed."}`);
       }
     } finally {
       setIsLoading(false);

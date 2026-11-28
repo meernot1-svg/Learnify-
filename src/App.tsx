@@ -168,6 +168,7 @@ function PageWrapper({ children }: { children: React.ReactNode }) {
 }
 
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { ToastContainer } from './components/ToastContainer';
 
 export default function App() {
   return (
@@ -177,6 +178,7 @@ export default function App() {
           <AuthProvider>
             <Router>
               <AppRoutes />
+              <ToastContainer />
             </Router>
           </AuthProvider>
         </LanguageProvider>

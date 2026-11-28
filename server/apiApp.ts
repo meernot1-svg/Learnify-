@@ -114,6 +114,65 @@ function buildOpenRouterAttachmentPart(base64Data: string, mimeType: string): Op
   };
 }
 
+class OpenRouterProxyError extends Error {
+  status: number;
+  code: string;
+  retryable: boolean;
+
+  constructor(message: string, status = 502, code = 'OPENROUTER_ERROR', retryable = true) {
+    super(redactSensitiveTokens(message));
+    this.name = 'OpenRouterProxyError';
+    this.status = status;
+    this.code = code;
+    this.retryable = retryable;
+  }
+}
+
+function classifyNetworkError(err: unknown, providerName = 'OpenRouter'): OpenRouterProxyError {
+  const errObj = err as { name?: string; message?: string; cause?: { code?: string; message?: string } };
+  const name = String(errObj?.name || '');
+  const msg = String(errObj?.message || '');
+  const causeCode = String(errObj?.cause?.code || '');
+
+  if (name === 'TimeoutError' || name === 'AbortError' || /timed out|timeout/i.test(msg)) {
+    return new OpenRouterProxyError(
+      `${providerName} timed out while generating a response. Please try a shorter prompt or retry.`,
+      504,
+      'AI_TIMEOUT',
+      true
+    );
+  }
+
+  if (
+    /ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ECONNRESET|ETIMEDOUT|ENETUNREACH|fetch failed|network/i.test(
+      `${causeCode} ${msg}`
+    )
+  ) {
+    return new OpenRouterProxyError(
+      `Unable to reach ${providerName} AI servers right now. Please check connectivity and try again.`,
+      503,
+      'AI_UNREACHABLE',
+      true
+    );
+  }
+
+  return new OpenRouterProxyError(
+    redactSensitiveTokens(msg || `${providerName} connection failed.`),
+    502,
+    'AI_UPSTREAM_FAILURE',
+    true
+  );
+}
+
+function parseJsonSafe(rawText: string): any {
+  if (!rawText || !rawText.trim()) return {};
+  try {
+    return JSON.parse(rawText);
+  } catch {
+    return {};
+  }
+}
+
 async function callOpenRouter(
   messages: OpenRouterMessage[],
   expectJson = false,
@@ -121,7 +180,12 @@ async function callOpenRouter(
 ): Promise<string> {
   const apiKey = getOpenRouterKey();
   if (!apiKey) {
-    throw new Error('OPENROUTER_API_KEY is not configured.');
+    throw new OpenRouterProxyError(
+      'OPENROUTER_API_KEY is not configured. Add it in Vercel Project Settings -> Environment Variables.',
+      503,
+      'AI_NOT_CONFIGURED',
+      false
+    );
   }
   const configuredModel = getConfiguredOpenRouterModel();
   const baseModels = preferFast
@@ -137,7 +201,12 @@ async function callOpenRouter(
       : '') ||
     'https://learnify-ten-olive.vercel.app';
 
-  let lastError = 'OpenRouter request failed.';
+  let lastError: OpenRouterProxyError = new OpenRouterProxyError(
+    'OpenRouter AI service did not return a valid response.',
+    502,
+    'AI_UPSTREAM_FAILURE',
+    true
+  );
 
   for (let i = 0; i < candidates.length; i++) {
     const model = candidates[i];
@@ -164,12 +233,48 @@ async function callOpenRouter(
         signal: AbortSignal.timeout(45000),
       });
     } catch (networkErr) {
-      lastError = networkErr instanceof Error ? networkErr.message : 'OpenRouter network request failed.';
+      lastError = classifyNetworkError(networkErr, 'OpenRouter');
       if (hasMore) continue;
-      throw new Error(redactSensitiveTokens(lastError));
+      throw lastError;
     }
 
-    const payload: any = await response.json().catch(() => ({}));
+    const rawText = await response.text().catch(() => '');
+    const payload = parseJsonSafe(rawText);
+
+    // OpenRouter can occasionally return HTTP 200 with an embedded upstream error payload
+    if (payload?.error) {
+      const embeddedMsg = redactSensitiveTokens(
+        String(payload.error?.message || payload.error || 'Upstream OpenRouter provider error.')
+      );
+      const embeddedCode = Number(payload.error?.code) || response.status || 502;
+      if (embeddedCode === 401 || embeddedCode === 403) {
+        throw new OpenRouterProxyError(
+          'OpenRouter API key is invalid or unauthorized. Please verify OPENROUTER_API_KEY.',
+          401,
+          'AI_AUTH_INVALID',
+          false
+        );
+      }
+      if (embeddedCode === 402) {
+        lastError = new OpenRouterProxyError(
+          'OpenRouter account has insufficient credits for this model.',
+          402,
+          'AI_INSUFFICIENT_CREDITS',
+          false
+        );
+        if (hasMore) continue;
+        throw lastError;
+      }
+      lastError = new OpenRouterProxyError(
+        embeddedMsg,
+        embeddedCode >= 400 && embeddedCode < 600 ? embeddedCode : 502,
+        embeddedCode === 429 ? 'AI_RATE_LIMITED' : 'AI_UPSTREAM_FAILURE',
+        true
+      );
+      if (hasMore) continue;
+      throw lastError;
+    }
+
     if (response.ok) {
       const content = payload?.choices?.[0]?.message?.content;
       const extracted =
@@ -181,32 +286,60 @@ async function callOpenRouter(
       if (extracted.trim()) {
         return extracted;
       }
-      lastError = 'OpenRouter returned an empty response.';
+      lastError = new OpenRouterProxyError(
+        'OpenRouter returned an empty response. Please try again.',
+        502,
+        'AI_EMPTY_RESPONSE',
+        true
+      );
       if (hasMore) continue;
-      throw new Error(lastError);
+      throw lastError;
     }
 
     const providerMessage = redactSensitiveTokens(
-      String(payload?.error?.message || `OpenRouter request failed (${response.status})`)
+      String(
+        payload?.error?.message ||
+          (response.status === 502 || response.status === 503
+            ? `OpenRouter AI gateway is temporarily unavailable (HTTP ${response.status}).`
+            : response.status === 504
+            ? 'OpenRouter AI gateway timed out (HTTP 504).'
+            : `OpenRouter request failed (HTTP ${response.status}).`)
+      )
     );
     if (response.status === 401 || response.status === 403) {
-      throw new Error('OpenRouter API key is invalid or unauthorized. Please check Settings > Secrets.');
+      throw new OpenRouterProxyError(
+        'OpenRouter API key is invalid or unauthorized. Please check OPENROUTER_API_KEY in Vercel/Secrets.',
+        401,
+        'AI_AUTH_INVALID',
+        false
+      );
     }
     if (response.status === 429) {
-      if (hasMore) {
-        lastError = providerMessage;
-        continue;
-      }
-      throw new Error('AI request quota temporarily exceeded. Please wait a moment and try again.');
+      lastError = new OpenRouterProxyError(
+        'AI request quota temporarily exceeded. Please wait a moment and try again.',
+        429,
+        'AI_RATE_LIMITED',
+        true
+      );
+      if (hasMore) continue;
+      throw lastError;
     }
     if (response.status === 402) {
-      if (hasMore) {
-        lastError = 'OpenRouter account has insufficient credits for this model.';
-        continue;
-      }
-      throw new Error('OpenRouter account has insufficient credits for this model.');
+      lastError = new OpenRouterProxyError(
+        'OpenRouter account has insufficient credits for this model.',
+        402,
+        'AI_INSUFFICIENT_CREDITS',
+        false
+      );
+      if (hasMore) continue;
+      throw lastError;
     }
-    lastError = providerMessage;
+    lastError = new OpenRouterProxyError(
+      providerMessage,
+      response.status >= 500 ? response.status : 502,
+      response.status === 504 || response.status === 408 ? 'AI_TIMEOUT' : 'AI_UPSTREAM_FAILURE',
+      true
+    );
     if (
       hasMore &&
       (response.status === 400 ||
@@ -217,10 +350,10 @@ async function callOpenRouter(
     ) {
       continue;
     }
-    throw new Error(providerMessage);
+    throw lastError;
   }
 
-  throw new Error(redactSensitiveTokens(lastError));
+  throw lastError;
 }
 
 function parseJsonArrayResponse(rawText: string): unknown[] {
@@ -323,10 +456,23 @@ function isAllowedMimeType(mimeType: unknown): mimeType is string {
   return mimeType.startsWith('image/') || mimeType === 'application/pdf';
 }
 
-function formatAiError(err: unknown): { status: number; message: string } {
+function formatAiError(err: unknown): {
+  status: number;
+  message: string;
+  code: string;
+  retryable: boolean;
+} {
+  if (err instanceof OpenRouterProxyError) {
+    return {
+      status: err.status,
+      message: err.message,
+      code: err.code,
+      retryable: err.retryable,
+    };
+  }
   const raw = redactSensitiveTokens(err instanceof Error ? err.message : String(err));
   if (raw.includes('not configured') || raw.includes('Add OPENROUTER_API_KEY') || raw.includes('Add GEMINI_API_KEY')) {
-    return { status: 503, message: raw };
+    return { status: 503, message: raw, code: 'AI_NOT_CONFIGURED', retryable: false };
   }
   if (
     raw.includes('API_KEY_INVALID') ||
@@ -335,15 +481,61 @@ function formatAiError(err: unknown): { status: number; message: string } {
     raw.includes('401') ||
     raw.includes('403')
   ) {
-    return { status: 401, message: 'AI API key is invalid or missing. Please check Settings > Secrets.' };
+    return {
+      status: 401,
+      message: 'AI API key is invalid or missing. Please verify OPENROUTER_API_KEY in Vercel/Secrets.',
+      code: 'AI_AUTH_INVALID',
+      retryable: false,
+    };
   }
   if (raw.includes('insufficient credits') || raw.includes('402')) {
-    return { status: 402, message: 'OpenRouter account has insufficient credits for this request.' };
+    return {
+      status: 402,
+      message: 'OpenRouter account has insufficient credits for this request.',
+      code: 'AI_INSUFFICIENT_CREDITS',
+      retryable: false,
+    };
   }
   if (raw.includes('RESOURCE_EXHAUSTED') || raw.includes('429') || raw.includes('quota temporarily exceeded')) {
-    return { status: 429, message: 'AI request quota temporarily exceeded. Please wait a moment and try again.' };
+    return {
+      status: 429,
+      message: 'AI request quota temporarily exceeded. Please wait a moment and try again.',
+      code: 'AI_RATE_LIMITED',
+      retryable: true,
+    };
   }
-  return { status: 500, message: raw || 'AI service encountered an unexpected error.' };
+  if (/timed out|timeout|TimeoutError|AbortError|504/i.test(raw)) {
+    return {
+      status: 504,
+      message: 'The AI service timed out before completing your request. Please try again.',
+      code: 'AI_TIMEOUT',
+      retryable: true,
+    };
+  }
+  if (/ECONNREFUSED|ENOTFOUND|EAI_AGAIN|fetch failed|unreachable|network|502|503/i.test(raw)) {
+    return {
+      status: 503,
+      message: 'AI service is temporarily unreachable. Please check your connection or retry shortly.',
+      code: 'AI_UNREACHABLE',
+      retryable: true,
+    };
+  }
+  return {
+    status: 502,
+    message: raw || 'AI service encountered an unexpected error.',
+    code: 'AI_UPSTREAM_FAILURE',
+    retryable: true,
+  };
+}
+
+function sendAiError(res: express.Response, err: unknown, routeTag: string) {
+  const formatted = formatAiError(err);
+  console.error(`[AI Proxy Error] ${routeTag} (${formatted.status} ${formatted.code}): ${formatted.message}`);
+  return res.status(formatted.status).json({
+    error: formatted.message,
+    code: formatted.code,
+    retryable: formatted.retryable,
+  });
 }
 
 export function createApiApp(): express.Express {
@@ -525,8 +717,7 @@ export function createApiApp(): express.Express {
 
       return res.json({ text });
     } catch (err) {
-      const { status, message } = formatAiError(err);
-      return res.status(status).json({ error: message });
+      return sendAiError(res, err, '/api/ai/chat');
     }
   });
 
@@ -680,8 +871,7 @@ export function createApiApp(): express.Express {
 
       return res.json({ mcqs: collected.slice(0, requestedCount) });
     } catch (err) {
-      const { status, message } = formatAiError(err);
-      return res.status(status).json({ error: message });
+      return sendAiError(res, err, '/api/ai/mcqs');
     }
   });
 
@@ -737,8 +927,7 @@ export function createApiApp(): express.Express {
 
       return res.json({ flashcards });
     } catch (err) {
-      const { status, message } = formatAiError(err);
-      return res.status(status).json({ error: message });
+      return sendAiError(res, err, '/api/ai/flashcards');
     }
   });
 
@@ -772,8 +961,7 @@ export function createApiApp(): express.Express {
 
       return res.json({ text });
     } catch (err) {
-      const { status, message } = formatAiError(err);
-      return res.status(status).json({ error: message });
+      return sendAiError(res, err, '/api/ai/notes');
     }
   });
 
@@ -840,8 +1028,7 @@ export function createApiApp(): express.Express {
 
       return res.json({ text });
     } catch (err) {
-      const { status, message } = formatAiError(err);
-      return res.status(status).json({ error: message });
+      return sendAiError(res, err, '/api/ai/explain');
     }
   });
 
@@ -1061,8 +1248,7 @@ Write strictly in pure standard Sindhi (سنڌي) using proper Sindhi words (آ�
 
       return res.json(result);
     } catch (err) {
-      const { status, message } = formatAiError(err);
-      return res.status(status).json({ error: message });
+      return sendAiError(res, err, '/api/ai/sindhi-explain');
     }
   });
 
@@ -1213,27 +1399,30 @@ Write strictly in pure standard Sindhi (سنڌي) using proper Sindhi words (آ�
               }),
               signal: AbortSignal.timeout(45000),
             });
-            const payload: any = await orRes.json().catch(() => ({}));
+            const rawAudioText = await orRes.text().catch(() => '');
+            const payload = parseJsonSafe(rawAudioText);
             const audioData = payload?.choices?.[0]?.message?.audio?.data;
-            if (orRes.ok && typeof audioData === 'string' && audioData.trim()) {
+            if (orRes.ok && !payload?.error && typeof audioData === 'string' && audioData.trim()) {
               return res.json({
                 audioBase64: audioData.trim(),
                 mimeType: 'audio/wav',
                 voiceName,
               });
             }
-            const errMsg = payload?.error?.message || `OpenRouter audio status ${orRes.status}`;
+            const errMsg = redactSensitiveTokens(
+              String(payload?.error?.message || `OpenRouter audio status ${orRes.status}`)
+            );
             errors.push(errMsg);
           } catch (e) {
-            errors.push(e instanceof Error ? e.message : String(e));
+            const netErr = classifyNetworkError(e, 'OpenRouter Audio');
+            errors.push(netErr.message);
           }
         }
       }
 
       throw new Error(errors[errors.length - 1] || 'Voice synthesis failed across configured providers.');
     } catch (err) {
-      const { status, message } = formatAiError(err);
-      return res.status(status).json({ error: message });
+      return sendAiError(res, err, '/api/ai/tts');
     }
   });
 
@@ -1334,8 +1523,7 @@ Write strictly in pure standard Sindhi (سنڌي) using proper Sindhi words (آ�
 
       return res.json({ text });
     } catch (err) {
-      const { status, message } = formatAiError(err);
-      return res.status(status).json({ error: message });
+      return sendAiError(res, err, '/api/ai/lab-assistant');
     }
   });
 
